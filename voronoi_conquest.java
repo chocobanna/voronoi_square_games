@@ -1,4 +1,5 @@
 import javax.swing.*;
+import javax.swing.event.*;
 import java.awt.*;
 import java.awt.event.*;
 import java.awt.image.BufferedImage;
@@ -6,7 +7,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
-// Main class that launches the main menu.
+// Main class launches the main menu.
 public class VoronoiSimulation {
     public static void main(String[] args) {
         SwingUtilities.invokeLater(() -> createAndShowMainMenu());
@@ -23,18 +24,22 @@ public class VoronoiSimulation {
     }
 }
 
-// Main menu panel: choose map width, map height, number of Voronoi squares, and number of colors (via slider 2-5).
+// Main menu panel: choose map width, height, number of squares, and number of colors,
+// plus select the AI type (dumb or smart) and risk aversion (for smart AI).
 class MainMenuPanel extends JPanel {
     private JTextField widthField;
     private JTextField heightField;
     private JTextField numSquaresField;
     private JSlider numColorsSlider;
     private JLabel sliderLabel;
+    private JComboBox<String> aiTypeCombo;
+    private JSlider riskSlider;
+    private JLabel riskLabel;
     private JFrame parentFrame;
     
     public MainMenuPanel(JFrame frame) {
         this.parentFrame = frame;
-        setLayout(new GridLayout(5, 2, 5, 5));
+        setLayout(new GridLayout(7, 2, 5, 5));
         
         add(new JLabel("Map Width:"));
         widthField = new JTextField("800");
@@ -55,10 +60,24 @@ class MainMenuPanel extends JPanel {
         numColorsSlider.setPaintLabels(true);
         add(numColorsSlider);
         
-        // Optional label to show current slider value.
         sliderLabel = new JLabel("Colors: " + numColorsSlider.getValue());
         numColorsSlider.addChangeListener(e -> sliderLabel.setText("Colors: " + numColorsSlider.getValue()));
         add(sliderLabel);
+        
+        add(new JLabel("AI Type:"));
+        aiTypeCombo = new JComboBox<>(new String[] { "Dumb AI", "Smart AI" });
+        add(aiTypeCombo);
+        
+        add(new JLabel("Smart AI Risk (0 = aggressive, 1 = risk averse):"));
+        riskSlider = new JSlider(0, 100, 50); // represents risk aversion as a value between 0 and 1
+        riskSlider.setMajorTickSpacing(25);
+        riskSlider.setPaintTicks(true);
+        riskSlider.setPaintLabels(true);
+        add(riskSlider);
+        
+        riskLabel = new JLabel("Risk: " + (riskSlider.getValue() / 100.0));
+        riskSlider.addChangeListener(e -> riskLabel.setText("Risk: " + (riskSlider.getValue() / 100.0)));
+        add(riskLabel);
         
         JButton startButton = new JButton("Start Game");
         startButton.addActionListener(e -> {
@@ -67,10 +86,13 @@ class MainMenuPanel extends JPanel {
                 int height = Integer.parseInt(heightField.getText());
                 int numSquares = Integer.parseInt(numSquaresField.getText());
                 int numColors = numColorsSlider.getValue();
-                // Open a new simulation window sized to the map dimensions.
+                int aiType = aiTypeCombo.getSelectedIndex(); // 0 for dumb, 1 for smart
+                double smartRisk = riskSlider.getValue() / 100.0;
+                
+                // Open a new simulation window sized to the map.
                 JFrame simFrame = new JFrame("Voronoi Combat Simulation");
                 simFrame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-                VoronoiSquares simulation = new VoronoiSquares(width, height, numSquares, numColors);
+                VoronoiSquares simulation = new VoronoiSquares(width, height, numSquares, numColors, aiType, smartRisk);
                 simFrame.getContentPane().add(simulation);
                 simFrame.pack();
                 simFrame.setLocationRelativeTo(null);
@@ -83,8 +105,8 @@ class MainMenuPanel extends JPanel {
     }
 }
 
-// Simulation panel – parameterized version of the Voronoi simulation.
-// Now, teams are named using colors (Red, Blue, Green, Yellow, Purple) according to the slider value.
+// The simulation panel. It is parameterized by map dimensions, number of sites, number of teams,
+// and also receives the chosen AI type (0 = dumb, 1 = smart) and a risk parameter for smart AI.
 class VoronoiSquares extends JPanel {
     private int mapWidth, mapHeight, numSites, numTeams;
     
@@ -93,7 +115,9 @@ class VoronoiSquares extends JPanel {
     private float[] teamHues;
     private String[] teamNames;
     private boolean[] teamIsAI;
-    private boolean aiEnabled = false; // Toggleable via a checkbox.
+    private boolean aiEnabled = true; // Non-human teams are controlled by AI based on main menu settings.
+    private int aiType; // 0 = Dumb AI, 1 = Smart AI
+    private double smartRisk; // value between 0.0 and 1.0
     
     // Region data.
     private Point[] sites;
@@ -111,21 +135,22 @@ class VoronoiSquares extends JPanel {
     
     // Interaction variables.
     private int selectedSource = -1;  // Selected source region.
-    private int lastMoveSource = -1, lastMoveDest = -1; // For drawing the move arrow.
+    private int lastMoveSource = -1, lastMoveDest = -1; // For drawing move arrow.
     private int highlightedSite = -1;
     private int mouseX = 0, mouseY = 0;
     
     private Random rand = new Random();
     
-    // Constructor: accepts map dimensions, number of sites, and number of teams (colors).
-    public VoronoiSquares(int mapWidth, int mapHeight, int numSites, int numTeams) {
+    // Constructor with additional AI parameters.
+    public VoronoiSquares(int mapWidth, int mapHeight, int numSites, int numTeams, int aiType, double smartRisk) {
         this.mapWidth = mapWidth;
         this.mapHeight = mapHeight;
         this.numSites = numSites;
         this.numTeams = numTeams;
+        this.aiType = aiType;
+        this.smartRisk = smartRisk;
         
-        // Set up team hues and names based on chosen number of colors.
-        // We'll use fixed color names.
+        // Use fixed color names for up to 5 teams.
         String[] availableNames = {"Red", "Blue", "Green", "Yellow", "Purple"};
         float[] availableHues = {0.0f, 0.67f, 0.33f, 0.15f, 0.83f};
         teamNames = new String[numTeams];
@@ -134,7 +159,7 @@ class VoronoiSquares extends JPanel {
         for (int i = 0; i < numTeams; i++) {
             teamNames[i] = availableNames[i];
             teamHues[i] = availableHues[i];
-            // Default: team 0 is human; others AI.
+            // Set team 0 as human; others are AI.
             teamIsAI[i] = (i != 0);
         }
         
@@ -154,10 +179,10 @@ class VoronoiSquares extends JPanel {
         
         // Initialize regions with random troop counts (10-50) and assign teams round-robin.
         for (int i = 0; i < numSites; i++) {
-            int troopCount = rand.nextInt(41) + 10; // 10 to 50
+            int troopCount = rand.nextInt(41) + 10;
             troops[i] = troopCount;
             isBastion[i] = false;
-            combatPower[i] = troopCount * 1.0;  // normal multiplier 1.0
+            combatPower[i] = troopCount * 1.0;
             int team = i % numTeams;
             regionTeam[i] = team;
             float brightness = computeBrightness(troops[i]);
@@ -198,14 +223,14 @@ class VoronoiSquares extends JPanel {
             }
         }
         
-        // Compute adjacency between regions.
+        // Compute adjacency.
         computeAdjacency();
         
         // Set up mouse listeners.
         addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
-                // Double-click turns a region into a bastion.
+                // Double-click turns region into bastion.
                 if (e.getClickCount() >= 2) {
                     int mx = e.getX();
                     int my = e.getY();
@@ -220,7 +245,7 @@ class VoronoiSquares extends JPanel {
                     return;
                 }
                 
-                // Ignore clicks during an AI turn.
+                // Ignore clicks if it's an AI turn.
                 if (teamIsAI[currentTeam] && aiEnabled) return;
                 
                 int mx = e.getX();
@@ -242,7 +267,6 @@ class VoronoiSquares extends JPanel {
                     System.out.println("Selected source region: " + selectedSource);
                     repaint();
                 } else {
-                    // If a source is already selected, check for adjacency.
                     if (clickedRegion == selectedSource) {
                         selectedSource = -1;
                         repaint();
@@ -252,8 +276,6 @@ class VoronoiSquares extends JPanel {
                         System.out.println("Region " + clickedRegion + " is not adjacent.");
                         return;
                     }
-                    
-                    // Execute move.
                     executeMove(selectedSource, clickedRegion);
                     selectedSource = -1;
                     endTurn();
@@ -281,25 +303,22 @@ class VoronoiSquares extends JPanel {
             }
         });
         
-        // Add a simple control panel (at the bottom) for ending turn and toggling AI.
+        // Add control panel at the bottom.
         setLayout(new BorderLayout());
-        JPanel simulationControl = new SimulationControlPanel();
-        add(simulationControl, BorderLayout.SOUTH);
+        JPanel controlPanel = new SimulationControlPanel();
+        add(controlPanel, BorderLayout.SOUTH);
     }
     
-    // Inner control panel class.
+    // Inner class for simulation control (end turn and AI toggle).
     private class SimulationControlPanel extends JPanel {
         public SimulationControlPanel() {
             JButton endTurnButton = new JButton("End Turn");
             endTurnButton.addActionListener(e -> endTurn());
             add(endTurnButton);
             
-            JCheckBox aiCheckBox = new JCheckBox("Enable AI", false);
+            JCheckBox aiCheckBox = new JCheckBox("Enable AI", true);
             aiCheckBox.addActionListener(e -> {
                 aiEnabled = aiCheckBox.isSelected();
-                for (int i = 0; i < numTeams; i++) {
-                    teamIsAI[i] = (i != 0) && aiEnabled;
-                }
                 System.out.println("AI enabled: " + aiEnabled);
             });
             add(aiCheckBox);
@@ -312,7 +331,7 @@ class VoronoiSquares extends JPanel {
         return Math.max(0.3f, brightness);
     }
     
-    // Update region stats (color and combat power).
+    // Update a region's stats.
     private void updateRegionStats(int regionIndex) {
         float brightness = computeBrightness(troops[regionIndex]);
         int team = regionTeam[regionIndex];
@@ -330,12 +349,10 @@ class VoronoiSquares extends JPanel {
         lastMoveSource = source;
         lastMoveDest = dest;
         
-        // Friendly move: merge troops.
         if (siteColors[source].equals(siteColors[dest])) {
             troops[dest] = destTroops + sourceTroops;
             troops[source] = 0;
         } else {
-            // Enemy move: resolve combat.
             if (sourcePower > destPower) {
                 double multiplier = isBastion[source] ? 1.5 : 1.0;
                 int newTroops = (int) Math.floor((sourcePower - destPower) / multiplier);
@@ -358,7 +375,7 @@ class VoronoiSquares extends JPanel {
         repaint();
     }
     
-    // Compute adjacent regions by scanning neighboring pixels.
+    // Compute adjacency between regions.
     private void computeAdjacency() {
         for (int x = 0; x < mapWidth; x++) {
             for (int y = 0; y < mapHeight; y++) {
@@ -391,7 +408,7 @@ class VoronoiSquares extends JPanel {
         }
     }
     
-    // End turn: add reinforcements, advance turn, skip teams with no regions, and trigger AI moves if enabled.
+    // End turn: add reinforcements, advance turn, skip teams with no regions, and trigger AI moves.
     public void endTurn() {
         for (int i = 0; i < numSites; i++) {
             troops[i] += 5;
@@ -413,7 +430,11 @@ class VoronoiSquares extends JPanel {
             new Timer(500, new ActionListener() {
                 @Override
                 public void actionPerformed(ActionEvent e) {
-                    doAIMove();
+                    if (aiType == 0) {
+                        doDumbAIMove();
+                    } else {
+                        doSmartAIMove();
+                    }
                     ((Timer)e.getSource()).stop();
                 }
             }).start();
@@ -429,8 +450,8 @@ class VoronoiSquares extends JPanel {
         return false;
     }
     
-    // AI move: choose a random valid move.
-    private void doAIMove() {
+    // Dumb AI: picks a random valid move.
+    private void doDumbAIMove() {
         List<int[]> moves = new ArrayList<>();
         for (int i = 0; i < numSites; i++) {
             if (regionTeam[i] == currentTeam && troops[i] > 0) {
@@ -442,17 +463,56 @@ class VoronoiSquares extends JPanel {
             }
         }
         if (moves.isEmpty()) {
-            System.out.println("AI (" + teamNames[currentTeam] + ") has no valid moves. Skipping turn.");
+            System.out.println("Dumb AI (" + teamNames[currentTeam] + ") has no valid moves. Skipping turn.");
             endTurn();
             return;
         }
         int[] move = moves.get(rand.nextInt(moves.size()));
-        System.out.println("AI (" + teamNames[currentTeam] + ") moves from region " + move[0] + " to region " + move[1]);
+        System.out.println("Dumb AI (" + teamNames[currentTeam] + ") moves from region " + move[0] + " to region " + move[1]);
         executeMove(move[0], move[1]);
         endTurn();
     }
     
-    // Utility to draw an arrow.
+    // Smart AI: evaluates moves and picks the one with the highest heuristic score.
+    private void doSmartAIMove() {
+        double bestScore = Double.NEGATIVE_INFINITY;
+        int[] bestMove = null;
+        for (int i = 0; i < numSites; i++) {
+            if (regionTeam[i] == currentTeam && troops[i] > 0) {
+                for (int j = 0; j < numSites; j++) {
+                    if (adjacent[i][j]) {
+                        double score = 0.0;
+                        if (regionTeam[i] == regionTeam[j]) {
+                            // Friendly move score (lower priority).
+                            score = 0.2 * troops[i];
+                        } else {
+                            double sourcePower = combatPower[i];
+                            double destPower = combatPower[j];
+                            if (sourcePower > destPower) {
+                                score = (sourcePower - destPower) * (1 - smartRisk);
+                            } else {
+                                score = -1000; // invalid move
+                            }
+                        }
+                        if (score > bestScore) {
+                            bestScore = score;
+                            bestMove = new int[]{i, j};
+                        }
+                    }
+                }
+            }
+        }
+        if (bestMove == null || bestScore <= 0) {
+            System.out.println("Smart AI (" + teamNames[currentTeam] + ") found no advantageous moves. Skipping turn.");
+            endTurn();
+            return;
+        }
+        System.out.println("Smart AI (" + teamNames[currentTeam] + ") moves from region " + bestMove[0] + " to region " + bestMove[1] + " with score " + bestScore);
+        executeMove(bestMove[0], bestMove[1]);
+        endTurn();
+    }
+    
+    // Utility: draw an arrow.
     private void drawArrow(Graphics2D g2d, int x1, int y1, int x2, int y2) {
         g2d.drawLine(x1, y1, x2, y2);
         double angle = Math.atan2(y2 - y1, x2 - x1);
@@ -469,7 +529,6 @@ class VoronoiSquares extends JPanel {
     @Override
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
-        // Draw the Voronoi diagram.
         g.drawImage(voronoiImage, 0, 0, null);
         
         // Draw borders.
@@ -488,7 +547,7 @@ class VoronoiSquares extends JPanel {
             g.fillOval(p.x - 3, p.y - 3, 6, 6);
         }
         
-        // Highlight selected source region.
+        // Highlight selected region.
         if (selectedSource != -1) {
             Graphics2D g2 = (Graphics2D) g.create();
             g2.setColor(new Color(0, 0, 0, 100));
@@ -512,7 +571,7 @@ class VoronoiSquares extends JPanel {
             g2.dispose();
         }
         
-        // Display troop count and combat power on hover.
+        // Display hover info.
         if (highlightedSite != -1) {
             Graphics2D g2 = (Graphics2D) g.create();
             g2.setColor(Color.BLACK);
@@ -521,7 +580,6 @@ class VoronoiSquares extends JPanel {
             g2.dispose();
         }
         
-        // Display current turn info.
         g.setColor(Color.BLACK);
         g.drawString("Current Turn: " + teamNames[currentTeam], 10, 20);
     }
