@@ -9,7 +9,7 @@ import java.util.Random;
 public class VoronoiSquares extends JPanel {
     private static final int WIDTH = 800;
     private static final int HEIGHT = 600;
-    private static final int NUM_SITES = 10;
+    private static final int NUM_SITES = 20;
     
     // Turn-based and team settings.
     private int numTeams = 5;
@@ -24,8 +24,10 @@ public class VoronoiSquares extends JPanel {
     // Region data.
     private Point[] sites;
     private Color[] siteColors;
-    private int[] troops;
-    private int[] regionTeam; // Team affiliation for each region.
+    private int[] troops;             // raw troop count
+    private double[] combatPower;     // effective strength (troops * multiplier)
+    private int[] regionTeam;         // team affiliation for each region
+    private boolean[] isBastion;      // if true, multiplier = 1.5, else 1.0
     
     // Voronoi diagram data.
     private int[][] regionAssignment;
@@ -34,7 +36,7 @@ public class VoronoiSquares extends JPanel {
     private boolean[][] adjacent;
     
     // Interaction variables.
-    private int selectedSource = -1;  // Selected source region (human move).
+    private int selectedSource = -1;  // Selected source region (for human moves).
     private int lastMoveSource = -1, lastMoveDest = -1; // For drawing the move arrow.
     private int highlightedSite = -1;
     private int mouseX = 0, mouseY = 0;
@@ -46,23 +48,27 @@ public class VoronoiSquares extends JPanel {
         sites = new Point[NUM_SITES];
         siteColors = new Color[NUM_SITES];
         troops = new int[NUM_SITES];
+        combatPower = new double[NUM_SITES];
         regionTeam = new int[NUM_SITES];
+        isBastion = new boolean[NUM_SITES];
         regionAssignment = new int[WIDTH][HEIGHT];
         borders = new boolean[WIDTH][HEIGHT];
         adjacent = new boolean[NUM_SITES][NUM_SITES];
         
         // By default, let team 0 be human and all others be AI (if AI is enabled).
         for (int i = 0; i < numTeams; i++) {
-            teamIsAI[i] = (i != 0); // Only team 0 is human by default.
+            teamIsAI[i] = (i != 0);
         }
         
-        // Initialize regions with random troop counts (between 10 and 50) and assign teams round-robin.
+        // Initialize regions with random troop counts (10-50) and assign teams round-robin.
         for (int i = 0; i < NUM_SITES; i++) {
-            int troopCount = rand.nextInt(41) + 10; // Start with a moderate number.
+            int troopCount = rand.nextInt(41) + 10; // 10 to 50
             troops[i] = troopCount;
+            isBastion[i] = false;
+            combatPower[i] = troopCount * 1.0;  // normal multiplier 1.0
             int team = i % numTeams;
             regionTeam[i] = team;
-            float brightness = computeBrightness(troopCount);
+            float brightness = computeBrightness(troops[i]);
             sites[i] = new Point(rand.nextInt(WIDTH), rand.nextInt(HEIGHT));
             siteColors[i] = Color.getHSBColor(teamHues[team], 1.0f, brightness);
         }
@@ -87,7 +93,7 @@ public class VoronoiSquares extends JPanel {
             }
         }
         
-        // Compute borders (a pixel is a border if any 4-neighbor belongs to a different region).
+        // Compute borders: a pixel is a border if any 4-neighbor is in a different region.
         for (int x = 0; x < WIDTH; x++) {
             for (int y = 0; y < HEIGHT; y++) {
                 int cur = regionAssignment[x][y];
@@ -103,17 +109,28 @@ public class VoronoiSquares extends JPanel {
         // Compute adjacency between regions.
         computeAdjacency();
         
-        // Mouse listeners for human moves.
+        // Remove rivers: no river initialization.
+        
+        // Mouse listeners for human moves and double-click bastion creation.
         addMouseListener(new MouseAdapter() {
             @Override
-            public void mouseExited(MouseEvent e) {
-                highlightedSite = -1;
-                repaint();
-            }
-            
-            @Override
             public void mouseClicked(MouseEvent e) {
-                // If it's not a human turn, ignore mouse clicks.
+                // Double-click: turn region into bastion.
+                if (e.getClickCount() >= 2) {
+                    int mx = e.getX();
+                    int my = e.getY();
+                    if (mx < 0 || mx >= WIDTH || my < 0 || my >= HEIGHT) return;
+                    int clickedRegion = regionAssignment[mx][my];
+                    if (!isBastion[clickedRegion]) {
+                        isBastion[clickedRegion] = true;
+                        combatPower[clickedRegion] = troops[clickedRegion] * 1.5;
+                        System.out.println("Region " + clickedRegion + " turned into a bastion.");
+                        repaint();
+                    }
+                    return;
+                }
+                
+                // Ignore clicks if it's an AI turn.
                 if (teamIsAI[currentTeam] && aiEnabled) return;
                 
                 int mx = e.getX();
@@ -121,7 +138,7 @@ public class VoronoiSquares extends JPanel {
                 if (mx < 0 || mx >= WIDTH || my < 0 || my >= HEIGHT) return;
                 int clickedRegion = regionAssignment[mx][my];
                 
-                // Selection: only allow human to select their own region.
+                // Selection: human can only select their own region.
                 if (selectedSource == -1) {
                     if (regionTeam[clickedRegion] != currentTeam) {
                         System.out.println("Not your region. Current turn: " + teamNames[currentTeam]);
@@ -135,7 +152,7 @@ public class VoronoiSquares extends JPanel {
                     System.out.println("Selected source region: " + selectedSource);
                     repaint();
                 } else {
-                    // A source is already selected. Check if the clicked region is adjacent.
+                    // A source is selected; check if the clicked region is adjacent.
                     if (clickedRegion == selectedSource) {
                         selectedSource = -1;
                         repaint();
@@ -146,11 +163,17 @@ public class VoronoiSquares extends JPanel {
                         return;
                     }
                     
-                    // Execute troop movement.
+                    // Execute move.
                     executeMove(selectedSource, clickedRegion);
                     selectedSource = -1;
                     endTurn();
                 }
+            }
+            
+            @Override
+            public void mouseExited(MouseEvent e) {
+                highlightedSite = -1;
+                repaint();
             }
         });
         
@@ -169,50 +192,59 @@ public class VoronoiSquares extends JPanel {
         });
     }
     
-    // Compute brightness based on troop count.
+    // Compute brightness based on raw troop count.
     private float computeBrightness(int troopCount) {
-        // Start at 0.8 for 10 troops, and decrease gradually with a minimum brightness of 0.3.
         float brightness = 0.8f - (troopCount - 10) * 0.004f;
         return Math.max(0.3f, brightness);
+    }
+    
+    // Update a region's stats: its color and combat power.
+    private void updateRegionStats(int regionIndex) {
+        float brightness = computeBrightness(troops[regionIndex]);
+        int team = regionTeam[regionIndex];
+        siteColors[regionIndex] = Color.getHSBColor(teamHues[team], 1.0f, brightness);
+        combatPower[regionIndex] = troops[regionIndex] * (isBastion[regionIndex] ? 1.5 : 1.0);
     }
     
     // Execute a move from source to destination.
     private void executeMove(int source, int dest) {
         int sourceTroops = troops[source];
         int destTroops = troops[dest];
-        Color sourceColor = siteColors[source];
-        Color destColor = siteColors[dest];
-        
+        double sourcePower = combatPower[source];
+        double destPower = combatPower[dest];
         System.out.println("Moving troops from region " + source + " to region " + dest);
         lastMoveSource = source;
         lastMoveDest = dest;
         
-        if (sourceColor.equals(destColor)) {
-            // Friendly move: merge troops.
+        // Friendly move: merge raw troops.
+        if (siteColors[source].equals(siteColors[dest])) {
             troops[dest] = destTroops + sourceTroops;
             troops[source] = 0;
         } else {
-            // Enemy move: combat resolution.
-            if (sourceTroops > destTroops) {
-                // Attacker wins: convert the region.
-                troops[dest] = sourceTroops - destTroops;
-                siteColors[dest] = sourceColor;
+            // Enemy move: resolve combat using effective power.
+            if (sourcePower > destPower) {
+                double multiplier = isBastion[source] ? 1.5 : 1.0;
+                int newTroops = (int)Math.floor((sourcePower - destPower) / multiplier);
+                troops[dest] = newTroops;
                 regionTeam[dest] = regionTeam[source];
+                siteColors[dest] = siteColors[source];
+                isBastion[dest] = isBastion[source];
                 troops[source] = 0;
             } else {
-                // Defender holds.
-                troops[dest] = destTroops - sourceTroops;
+                double multiplier = isBastion[dest] ? 1.5 : 1.0;
+                int newTroops = (int)Math.floor((destPower - sourcePower) / multiplier);
+                troops[dest] = newTroops;
                 troops[source] = 0;
             }
         }
         
-        updateRegionColor(source);
-        updateRegionColor(dest);
+        updateRegionStats(source);
+        updateRegionStats(dest);
         updateVoronoiImage();
         repaint();
     }
     
-    // Compute which regions are adjacent by scanning neighboring pixels.
+    // Compute adjacent regions by scanning neighboring pixels.
     private void computeAdjacency() {
         for (int x = 0; x < WIDTH; x++) {
             for (int y = 0; y < HEIGHT; y++) {
@@ -235,15 +267,7 @@ public class VoronoiSquares extends JPanel {
         }
     }
     
-    // Update a region's color based on its troop count and team affiliation.
-    private void updateRegionColor(int regionIndex) {
-        int troopCount = troops[regionIndex];
-        float brightness = computeBrightness(troopCount);
-        int team = regionTeam[regionIndex];
-        siteColors[regionIndex] = Color.getHSBColor(teamHues[team], 1.0f, brightness);
-    }
-    
-    // Rebuild the Voronoi image based on current site colors.
+    // Rebuild the Voronoi image based on current region colors.
     private void updateVoronoiImage() {
         for (int x = 0; x < WIDTH; x++) {
             for (int y = 0; y < HEIGHT; y++) {
@@ -253,19 +277,16 @@ public class VoronoiSquares extends JPanel {
         }
     }
     
-    // End turn: add 5 troops to every region, skip turn if current team has no tiles, and if AI is enabled, auto-move.
+    // End turn: add 5 troops (no cap) to every region, skip teams with no regions, and handle AI.
     public void endTurn() {
-        // Reinforcement: add 5 troops to every region.
         for (int i = 0; i < NUM_SITES; i++) {
             troops[i] += 5;
-            updateRegionColor(i);
+            updateRegionStats(i);
         }
         updateVoronoiImage();
         selectedSource = -1;
         
-        // Advance turn.
         currentTeam = (currentTeam + 1) % numTeams;
-        // Skip teams with no tiles.
         while (!teamHasTiles(currentTeam)) {
             System.out.println("Skipping turn for " + teamNames[currentTeam] + " (no tiles).");
             currentTeam = (currentTeam + 1) % numTeams;
@@ -274,9 +295,7 @@ public class VoronoiSquares extends JPanel {
         System.out.println("Turn ended. Current turn: " + teamNames[currentTeam]);
         repaint();
         
-        // If AI is enabled and the current team is AI, schedule an AI move.
         if (aiEnabled && teamIsAI[currentTeam]) {
-            // Use a Swing Timer for a short delay.
             new Timer(500, new ActionListener() {
                 @Override
                 public void actionPerformed(ActionEvent e) {
@@ -287,7 +306,7 @@ public class VoronoiSquares extends JPanel {
         }
     }
     
-    // Check if a given team has any regions.
+    // Check if a given team controls any regions.
     private boolean teamHasTiles(int team) {
         for (int i = 0; i < NUM_SITES; i++) {
             if (regionTeam[i] == team) return true;
@@ -298,7 +317,6 @@ public class VoronoiSquares extends JPanel {
     // AI move: choose a random valid move for the current team.
     private void doAIMove() {
         List<int[]> moves = new ArrayList<>();
-        // For each region belonging to currentTeam with troops, check adjacent regions.
         for (int i = 0; i < NUM_SITES; i++) {
             if (regionTeam[i] == currentTeam && troops[i] > 0) {
                 for (int j = 0; j < NUM_SITES; j++) {
@@ -313,14 +331,13 @@ public class VoronoiSquares extends JPanel {
             endTurn();
             return;
         }
-        // Pick a random move.
         int[] move = moves.get(rand.nextInt(moves.size()));
         System.out.println("AI (" + teamNames[currentTeam] + ") moves from region " + move[0] + " to region " + move[1]);
         executeMove(move[0], move[1]);
         endTurn();
     }
     
-    // Utility to draw an arrow from (x1, y1) to (x2, y2)
+    // Utility to draw an arrow from (x1, y1) to (x2, y2).
     private void drawArrow(Graphics2D g2d, int x1, int y1, int x2, int y2) {
         g2d.drawLine(x1, y1, x2, y2);
         double angle = Math.atan2(y2 - y1, x2 - x1);
@@ -337,7 +354,7 @@ public class VoronoiSquares extends JPanel {
     @Override
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
-        // Draw the Voronoi diagram.
+        // Draw the base Voronoi diagram.
         g.drawImage(voronoiImage, 0, 0, null);
         
         // Draw borders.
@@ -356,58 +373,58 @@ public class VoronoiSquares extends JPanel {
             g.fillOval(p.x - 3, p.y - 3, 6, 6);
         }
         
+        // Rivers removed.
+        
         // Highlight selected source region.
         if (selectedSource != -1) {
-            Graphics2D g2d = (Graphics2D) g.create();
-            g2d.setColor(new Color(0, 0, 0, 100));
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setColor(new Color(0, 0, 0, 100));
             for (int x = 0; x < WIDTH; x++) {
                 for (int y = 0; y < HEIGHT; y++) {
                     if (regionAssignment[x][y] == selectedSource) {
-                        g2d.fillRect(x, y, 1, 1);
+                        g2.fillRect(x, y, 1, 1);
                     }
                 }
             }
-            g2d.dispose();
+            g2.dispose();
         }
         
         // Draw move arrow if applicable.
         if (lastMoveSource != -1 && lastMoveDest != -1) {
-            Graphics2D g2d = (Graphics2D) g.create();
-            g2d.setColor(Color.MAGENTA);
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setColor(Color.MAGENTA);
             Point from = sites[lastMoveSource];
             Point to = sites[lastMoveDest];
-            drawArrow(g2d, from.x, from.y, to.x, to.y);
-            g2d.dispose();
+            drawArrow(g2, from.x, from.y, to.x, to.y);
+            g2.dispose();
         }
         
-        // Display troop count on hover.
+        // Display troop count and combat power on hover.
         if (highlightedSite != -1) {
-            Graphics2D g2d = (Graphics2D) g.create();
-            g2d.setColor(Color.BLACK);
-            String text = "Troops: " + troops[highlightedSite];
-            g2d.drawString(text, mouseX + 10, mouseY + 10);
-            g2d.dispose();
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setColor(Color.BLACK);
+            String text = "Troops: " + troops[highlightedSite] + " | Power: " + String.format("%.1f", combatPower[highlightedSite]);
+            g2.drawString(text, mouseX + 10, mouseY + 10);
+            g2.dispose();
         }
         
-        // Display current turn info with team name.
+        // Display current turn info.
         g.setColor(Color.BLACK);
         g.drawString("Current Turn: " + teamNames[currentTeam], 10, 20);
     }
     
     public static void main(String[] args) {
-        JFrame frame = new JFrame("Turn-Based Voronoi Combat Simulation");
+        JFrame frame = new JFrame("Voronoi Combat Simulation without Rivers");
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         VoronoiSquares panel = new VoronoiSquares();
         frame.setLayout(new BorderLayout());
         frame.add(panel, BorderLayout.CENTER);
         
-        // Add a control panel for ending turn and toggling AI.
         JPanel controlPanel = new JPanel();
         JButton endTurnButton = new JButton("End Turn");
         endTurnButton.addActionListener(new ActionListener() {
             @Override
             public void actionPerformed(ActionEvent e) {
-                // Only allow manual end-turn if it's human's turn.
                 if (!(panel.aiEnabled && panel.teamIsAI[panel.currentTeam])) {
                     panel.endTurn();
                 }
@@ -420,7 +437,6 @@ public class VoronoiSquares extends JPanel {
             @Override
             public void actionPerformed(ActionEvent e) {
                 panel.aiEnabled = aiCheckBox.isSelected();
-                // Update teamIsAI: keep team 0 human; all others become AI if enabled.
                 for (int i = 0; i < panel.numTeams; i++) {
                     panel.teamIsAI[i] = (i != 0) && panel.aiEnabled;
                 }
