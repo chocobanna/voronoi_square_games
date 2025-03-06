@@ -6,19 +6,93 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
-public class VoronoiSquares extends JPanel {
-    private static final int WIDTH = 800;
-    private static final int HEIGHT = 600;
-    private static final int NUM_SITES = 20;
+// Main class that launches the main menu.
+public class VoronoiSimulation {
+    public static void main(String[] args) {
+        SwingUtilities.invokeLater(() -> createAndShowMainMenu());
+    }
+    
+    private static void createAndShowMainMenu() {
+        JFrame frame = new JFrame("Voronoi Simulation - Main Menu");
+        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        MainMenuPanel menu = new MainMenuPanel(frame);
+        frame.getContentPane().add(menu);
+        frame.pack();
+        frame.setLocationRelativeTo(null);
+        frame.setVisible(true);
+    }
+}
+
+// Main menu panel: choose map width, map height, number of Voronoi squares, and number of colors (via slider 2-5).
+class MainMenuPanel extends JPanel {
+    private JTextField widthField;
+    private JTextField heightField;
+    private JTextField numSquaresField;
+    private JSlider numColorsSlider;
+    private JLabel sliderLabel;
+    private JFrame parentFrame;
+    
+    public MainMenuPanel(JFrame frame) {
+        this.parentFrame = frame;
+        setLayout(new GridLayout(5, 2, 5, 5));
+        
+        add(new JLabel("Map Width:"));
+        widthField = new JTextField("800");
+        add(widthField);
+        
+        add(new JLabel("Map Height:"));
+        heightField = new JTextField("600");
+        add(heightField);
+        
+        add(new JLabel("Number of Voronoi Squares:"));
+        numSquaresField = new JTextField("10");
+        add(numSquaresField);
+        
+        add(new JLabel("Number of Colors:"));
+        numColorsSlider = new JSlider(JSlider.HORIZONTAL, 2, 5, 5);
+        numColorsSlider.setMajorTickSpacing(1);
+        numColorsSlider.setPaintTicks(true);
+        numColorsSlider.setPaintLabels(true);
+        add(numColorsSlider);
+        
+        // Optional label to show current slider value.
+        sliderLabel = new JLabel("Colors: " + numColorsSlider.getValue());
+        numColorsSlider.addChangeListener(e -> sliderLabel.setText("Colors: " + numColorsSlider.getValue()));
+        add(sliderLabel);
+        
+        JButton startButton = new JButton("Start Game");
+        startButton.addActionListener(e -> {
+            try {
+                int width = Integer.parseInt(widthField.getText());
+                int height = Integer.parseInt(heightField.getText());
+                int numSquares = Integer.parseInt(numSquaresField.getText());
+                int numColors = numColorsSlider.getValue();
+                // Open a new simulation window sized to the map dimensions.
+                JFrame simFrame = new JFrame("Voronoi Combat Simulation");
+                simFrame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+                VoronoiSquares simulation = new VoronoiSquares(width, height, numSquares, numColors);
+                simFrame.getContentPane().add(simulation);
+                simFrame.pack();
+                simFrame.setLocationRelativeTo(null);
+                simFrame.setVisible(true);
+            } catch (NumberFormatException ex) {
+                JOptionPane.showMessageDialog(parentFrame, "Invalid input. Please enter valid numbers.");
+            }
+        });
+        add(startButton);
+    }
+}
+
+// Simulation panel – parameterized version of the Voronoi simulation.
+// Now, teams are named using colors (Red, Blue, Green, Yellow, Purple) according to the slider value.
+class VoronoiSquares extends JPanel {
+    private int mapWidth, mapHeight, numSites, numTeams;
     
     // Turn-based and team settings.
-    private int numTeams = 5;
     private int currentTeam = 0;
-    // Define distinct hues for each team.
-    private float[] teamHues = {0.0f, 0.67f, 0.33f, 0.15f, 0.83f};
-    private String[] teamNames = {"Red", "Blue", "Green", "Yellow", "Purple"};
-    // Which teams are controlled by AI. By default, team 0 is human; others may be AI.
-    private boolean[] teamIsAI = new boolean[numTeams];
+    private float[] teamHues;
+    private String[] teamNames;
+    private boolean[] teamIsAI;
     private boolean aiEnabled = false; // Toggleable via a checkbox.
     
     // Region data.
@@ -36,32 +110,50 @@ public class VoronoiSquares extends JPanel {
     private boolean[][] adjacent;
     
     // Interaction variables.
-    private int selectedSource = -1;  // Selected source region (for human moves).
+    private int selectedSource = -1;  // Selected source region.
     private int lastMoveSource = -1, lastMoveDest = -1; // For drawing the move arrow.
     private int highlightedSite = -1;
     private int mouseX = 0, mouseY = 0;
     
     private Random rand = new Random();
     
-    public VoronoiSquares() {
-        setPreferredSize(new Dimension(WIDTH, HEIGHT));
-        sites = new Point[NUM_SITES];
-        siteColors = new Color[NUM_SITES];
-        troops = new int[NUM_SITES];
-        combatPower = new double[NUM_SITES];
-        regionTeam = new int[NUM_SITES];
-        isBastion = new boolean[NUM_SITES];
-        regionAssignment = new int[WIDTH][HEIGHT];
-        borders = new boolean[WIDTH][HEIGHT];
-        adjacent = new boolean[NUM_SITES][NUM_SITES];
+    // Constructor: accepts map dimensions, number of sites, and number of teams (colors).
+    public VoronoiSquares(int mapWidth, int mapHeight, int numSites, int numTeams) {
+        this.mapWidth = mapWidth;
+        this.mapHeight = mapHeight;
+        this.numSites = numSites;
+        this.numTeams = numTeams;
         
-        // By default, let team 0 be human and all others be AI (if AI is enabled).
+        // Set up team hues and names based on chosen number of colors.
+        // We'll use fixed color names.
+        String[] availableNames = {"Red", "Blue", "Green", "Yellow", "Purple"};
+        float[] availableHues = {0.0f, 0.67f, 0.33f, 0.15f, 0.83f};
+        teamNames = new String[numTeams];
+        teamHues = new float[numTeams];
+        teamIsAI = new boolean[numTeams];
         for (int i = 0; i < numTeams; i++) {
+            teamNames[i] = availableNames[i];
+            teamHues[i] = availableHues[i];
+            // Default: team 0 is human; others AI.
             teamIsAI[i] = (i != 0);
         }
         
+        setPreferredSize(new Dimension(mapWidth, mapHeight));
+        
+        // Initialize region arrays.
+        sites = new Point[numSites];
+        siteColors = new Color[numSites];
+        troops = new int[numSites];
+        combatPower = new double[numSites];
+        regionTeam = new int[numSites];
+        isBastion = new boolean[numSites];
+        
+        regionAssignment = new int[mapWidth][mapHeight];
+        borders = new boolean[mapWidth][mapHeight];
+        adjacent = new boolean[numSites][numSites];
+        
         // Initialize regions with random troop counts (10-50) and assign teams round-robin.
-        for (int i = 0; i < NUM_SITES; i++) {
+        for (int i = 0; i < numSites; i++) {
             int troopCount = rand.nextInt(41) + 10; // 10 to 50
             troops[i] = troopCount;
             isBastion[i] = false;
@@ -69,17 +161,17 @@ public class VoronoiSquares extends JPanel {
             int team = i % numTeams;
             regionTeam[i] = team;
             float brightness = computeBrightness(troops[i]);
-            sites[i] = new Point(rand.nextInt(WIDTH), rand.nextInt(HEIGHT));
+            sites[i] = new Point(rand.nextInt(mapWidth), rand.nextInt(mapHeight));
             siteColors[i] = Color.getHSBColor(teamHues[team], 1.0f, brightness);
         }
         
-        // Precompute the Voronoi diagram.
-        voronoiImage = new BufferedImage(WIDTH, HEIGHT, BufferedImage.TYPE_INT_RGB);
-        for (int x = 0; x < WIDTH; x++) {
-            for (int y = 0; y < HEIGHT; y++) {
+        // Build the Voronoi diagram.
+        voronoiImage = new BufferedImage(mapWidth, mapHeight, BufferedImage.TYPE_INT_RGB);
+        for (int x = 0; x < mapWidth; x++) {
+            for (int y = 0; y < mapHeight; y++) {
                 int closestIndex = 0;
                 int minDistSq = Integer.MAX_VALUE;
-                for (int i = 0; i < NUM_SITES; i++) {
+                for (int i = 0; i < numSites; i++) {
                     int dx = x - sites[i].x;
                     int dy = y - sites[i].y;
                     int distSq = dx * dx + dy * dy;
@@ -93,15 +185,15 @@ public class VoronoiSquares extends JPanel {
             }
         }
         
-        // Compute borders: a pixel is a border if any 4-neighbor is in a different region.
-        for (int x = 0; x < WIDTH; x++) {
-            for (int y = 0; y < HEIGHT; y++) {
+        // Compute borders.
+        for (int x = 0; x < mapWidth; x++) {
+            for (int y = 0; y < mapHeight; y++) {
                 int cur = regionAssignment[x][y];
                 boolean isBorder = false;
                 if (x > 0 && regionAssignment[x - 1][y] != cur) isBorder = true;
-                else if (x < WIDTH - 1 && regionAssignment[x + 1][y] != cur) isBorder = true;
+                else if (x < mapWidth - 1 && regionAssignment[x + 1][y] != cur) isBorder = true;
                 else if (y > 0 && regionAssignment[x][y - 1] != cur) isBorder = true;
-                else if (y < HEIGHT - 1 && regionAssignment[x][y + 1] != cur) isBorder = true;
+                else if (y < mapHeight - 1 && regionAssignment[x][y + 1] != cur) isBorder = true;
                 borders[x][y] = isBorder;
             }
         }
@@ -109,17 +201,15 @@ public class VoronoiSquares extends JPanel {
         // Compute adjacency between regions.
         computeAdjacency();
         
-        // Remove rivers: no river initialization.
-        
-        // Mouse listeners for human moves and double-click bastion creation.
+        // Set up mouse listeners.
         addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
-                // Double-click: turn region into bastion.
+                // Double-click turns a region into a bastion.
                 if (e.getClickCount() >= 2) {
                     int mx = e.getX();
                     int my = e.getY();
-                    if (mx < 0 || mx >= WIDTH || my < 0 || my >= HEIGHT) return;
+                    if (mx < 0 || mx >= mapWidth || my < 0 || my >= mapHeight) return;
                     int clickedRegion = regionAssignment[mx][my];
                     if (!isBastion[clickedRegion]) {
                         isBastion[clickedRegion] = true;
@@ -130,15 +220,15 @@ public class VoronoiSquares extends JPanel {
                     return;
                 }
                 
-                // Ignore clicks if it's an AI turn.
+                // Ignore clicks during an AI turn.
                 if (teamIsAI[currentTeam] && aiEnabled) return;
                 
                 int mx = e.getX();
                 int my = e.getY();
-                if (mx < 0 || mx >= WIDTH || my < 0 || my >= HEIGHT) return;
+                if (mx < 0 || mx >= mapWidth || my < 0 || my >= mapHeight) return;
                 int clickedRegion = regionAssignment[mx][my];
                 
-                // Selection: human can only select their own region.
+                // Human may only select their own region.
                 if (selectedSource == -1) {
                     if (regionTeam[clickedRegion] != currentTeam) {
                         System.out.println("Not your region. Current turn: " + teamNames[currentTeam]);
@@ -152,7 +242,7 @@ public class VoronoiSquares extends JPanel {
                     System.out.println("Selected source region: " + selectedSource);
                     repaint();
                 } else {
-                    // A source is selected; check if the clicked region is adjacent.
+                    // If a source is already selected, check for adjacency.
                     if (clickedRegion == selectedSource) {
                         selectedSource = -1;
                         repaint();
@@ -182,7 +272,7 @@ public class VoronoiSquares extends JPanel {
             public void mouseMoved(MouseEvent e) {
                 mouseX = e.getX();
                 mouseY = e.getY();
-                if (mouseX >= 0 && mouseX < WIDTH && mouseY >= 0 && mouseY < HEIGHT) {
+                if (mouseX >= 0 && mouseX < mapWidth && mouseY >= 0 && mouseY < mapHeight) {
                     highlightedSite = regionAssignment[mouseX][mouseY];
                 } else {
                     highlightedSite = -1;
@@ -190,15 +280,39 @@ public class VoronoiSquares extends JPanel {
                 repaint();
             }
         });
+        
+        // Add a simple control panel (at the bottom) for ending turn and toggling AI.
+        setLayout(new BorderLayout());
+        JPanel simulationControl = new SimulationControlPanel();
+        add(simulationControl, BorderLayout.SOUTH);
     }
     
-    // Compute brightness based on raw troop count.
+    // Inner control panel class.
+    private class SimulationControlPanel extends JPanel {
+        public SimulationControlPanel() {
+            JButton endTurnButton = new JButton("End Turn");
+            endTurnButton.addActionListener(e -> endTurn());
+            add(endTurnButton);
+            
+            JCheckBox aiCheckBox = new JCheckBox("Enable AI", false);
+            aiCheckBox.addActionListener(e -> {
+                aiEnabled = aiCheckBox.isSelected();
+                for (int i = 0; i < numTeams; i++) {
+                    teamIsAI[i] = (i != 0) && aiEnabled;
+                }
+                System.out.println("AI enabled: " + aiEnabled);
+            });
+            add(aiCheckBox);
+        }
+    }
+    
+    // Compute brightness based on troop count.
     private float computeBrightness(int troopCount) {
         float brightness = 0.8f - (troopCount - 10) * 0.004f;
         return Math.max(0.3f, brightness);
     }
     
-    // Update a region's stats: its color and combat power.
+    // Update region stats (color and combat power).
     private void updateRegionStats(int regionIndex) {
         float brightness = computeBrightness(troops[regionIndex]);
         int team = regionTeam[regionIndex];
@@ -216,15 +330,15 @@ public class VoronoiSquares extends JPanel {
         lastMoveSource = source;
         lastMoveDest = dest;
         
-        // Friendly move: merge raw troops.
+        // Friendly move: merge troops.
         if (siteColors[source].equals(siteColors[dest])) {
             troops[dest] = destTroops + sourceTroops;
             troops[source] = 0;
         } else {
-            // Enemy move: resolve combat using effective power.
+            // Enemy move: resolve combat.
             if (sourcePower > destPower) {
                 double multiplier = isBastion[source] ? 1.5 : 1.0;
-                int newTroops = (int)Math.floor((sourcePower - destPower) / multiplier);
+                int newTroops = (int) Math.floor((sourcePower - destPower) / multiplier);
                 troops[dest] = newTroops;
                 regionTeam[dest] = regionTeam[source];
                 siteColors[dest] = siteColors[source];
@@ -232,7 +346,7 @@ public class VoronoiSquares extends JPanel {
                 troops[source] = 0;
             } else {
                 double multiplier = isBastion[dest] ? 1.5 : 1.0;
-                int newTroops = (int)Math.floor((destPower - sourcePower) / multiplier);
+                int newTroops = (int) Math.floor((destPower - sourcePower) / multiplier);
                 troops[dest] = newTroops;
                 troops[source] = 0;
             }
@@ -246,17 +360,17 @@ public class VoronoiSquares extends JPanel {
     
     // Compute adjacent regions by scanning neighboring pixels.
     private void computeAdjacency() {
-        for (int x = 0; x < WIDTH; x++) {
-            for (int y = 0; y < HEIGHT; y++) {
+        for (int x = 0; x < mapWidth; x++) {
+            for (int y = 0; y < mapHeight; y++) {
                 int cur = regionAssignment[x][y];
-                if (x < WIDTH - 1) {
+                if (x < mapWidth - 1) {
                     int neighbor = regionAssignment[x + 1][y];
                     if (cur != neighbor) {
                         adjacent[cur][neighbor] = true;
                         adjacent[neighbor][cur] = true;
                     }
                 }
-                if (y < HEIGHT - 1) {
+                if (y < mapHeight - 1) {
                     int neighbor = regionAssignment[x][y + 1];
                     if (cur != neighbor) {
                         adjacent[cur][neighbor] = true;
@@ -267,19 +381,19 @@ public class VoronoiSquares extends JPanel {
         }
     }
     
-    // Rebuild the Voronoi image based on current region colors.
+    // Rebuild the Voronoi image.
     private void updateVoronoiImage() {
-        for (int x = 0; x < WIDTH; x++) {
-            for (int y = 0; y < HEIGHT; y++) {
+        for (int x = 0; x < mapWidth; x++) {
+            for (int y = 0; y < mapHeight; y++) {
                 int region = regionAssignment[x][y];
                 voronoiImage.setRGB(x, y, siteColors[region].getRGB());
             }
         }
     }
     
-    // End turn: add 5 troops (no cap) to every region, skip teams with no regions, and handle AI.
+    // End turn: add reinforcements, advance turn, skip teams with no regions, and trigger AI moves if enabled.
     public void endTurn() {
-        for (int i = 0; i < NUM_SITES; i++) {
+        for (int i = 0; i < numSites; i++) {
             troops[i] += 5;
             updateRegionStats(i);
         }
@@ -306,20 +420,21 @@ public class VoronoiSquares extends JPanel {
         }
     }
     
-    // Check if a given team controls any regions.
+    // Check if a team controls any regions.
     private boolean teamHasTiles(int team) {
-        for (int i = 0; i < NUM_SITES; i++) {
-            if (regionTeam[i] == team) return true;
+        for (int i = 0; i < numSites; i++) {
+            if (regionTeam[i] == team)
+                return true;
         }
         return false;
     }
     
-    // AI move: choose a random valid move for the current team.
+    // AI move: choose a random valid move.
     private void doAIMove() {
         List<int[]> moves = new ArrayList<>();
-        for (int i = 0; i < NUM_SITES; i++) {
+        for (int i = 0; i < numSites; i++) {
             if (regionTeam[i] == currentTeam && troops[i] > 0) {
-                for (int j = 0; j < NUM_SITES; j++) {
+                for (int j = 0; j < numSites; j++) {
                     if (adjacent[i][j]) {
                         moves.add(new int[]{i, j});
                     }
@@ -337,7 +452,7 @@ public class VoronoiSquares extends JPanel {
         endTurn();
     }
     
-    // Utility to draw an arrow from (x1, y1) to (x2, y2).
+    // Utility to draw an arrow.
     private void drawArrow(Graphics2D g2d, int x1, int y1, int x2, int y2) {
         g2d.drawLine(x1, y1, x2, y2);
         double angle = Math.atan2(y2 - y1, x2 - x1);
@@ -354,13 +469,13 @@ public class VoronoiSquares extends JPanel {
     @Override
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
-        // Draw the base Voronoi diagram.
+        // Draw the Voronoi diagram.
         g.drawImage(voronoiImage, 0, 0, null);
         
         // Draw borders.
         g.setColor(Color.BLACK);
-        for (int x = 0; x < WIDTH; x++) {
-            for (int y = 0; y < HEIGHT; y++) {
+        for (int x = 0; x < mapWidth; x++) {
+            for (int y = 0; y < mapHeight; y++) {
                 if (borders[x][y]) {
                     g.drawLine(x, y, x, y);
                 }
@@ -373,14 +488,12 @@ public class VoronoiSquares extends JPanel {
             g.fillOval(p.x - 3, p.y - 3, 6, 6);
         }
         
-        // Rivers removed.
-        
         // Highlight selected source region.
         if (selectedSource != -1) {
             Graphics2D g2 = (Graphics2D) g.create();
             g2.setColor(new Color(0, 0, 0, 100));
-            for (int x = 0; x < WIDTH; x++) {
-                for (int y = 0; y < HEIGHT; y++) {
+            for (int x = 0; x < mapWidth; x++) {
+                for (int y = 0; y < mapHeight; y++) {
                     if (regionAssignment[x][y] == selectedSource) {
                         g2.fillRect(x, y, 1, 1);
                     }
@@ -389,7 +502,7 @@ public class VoronoiSquares extends JPanel {
             g2.dispose();
         }
         
-        // Draw move arrow if applicable.
+        // Draw move arrow.
         if (lastMoveSource != -1 && lastMoveDest != -1) {
             Graphics2D g2 = (Graphics2D) g.create();
             g2.setColor(Color.MAGENTA);
@@ -411,44 +524,5 @@ public class VoronoiSquares extends JPanel {
         // Display current turn info.
         g.setColor(Color.BLACK);
         g.drawString("Current Turn: " + teamNames[currentTeam], 10, 20);
-    }
-    
-    public static void main(String[] args) {
-        JFrame frame = new JFrame("Voronoi Combat Simulation without Rivers");
-        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        VoronoiSquares panel = new VoronoiSquares();
-        frame.setLayout(new BorderLayout());
-        frame.add(panel, BorderLayout.CENTER);
-        
-        JPanel controlPanel = new JPanel();
-        JButton endTurnButton = new JButton("End Turn");
-        endTurnButton.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                if (!(panel.aiEnabled && panel.teamIsAI[panel.currentTeam])) {
-                    panel.endTurn();
-                }
-            }
-        });
-        controlPanel.add(endTurnButton);
-        
-        JCheckBox aiCheckBox = new JCheckBox("Enable AI", false);
-        aiCheckBox.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                panel.aiEnabled = aiCheckBox.isSelected();
-                for (int i = 0; i < panel.numTeams; i++) {
-                    panel.teamIsAI[i] = (i != 0) && panel.aiEnabled;
-                }
-                System.out.println("AI enabled: " + panel.aiEnabled);
-            }
-        });
-        controlPanel.add(aiCheckBox);
-        
-        frame.add(controlPanel, BorderLayout.SOUTH);
-        
-        frame.pack();
-        frame.setLocationRelativeTo(null);
-        frame.setVisible(true);
     }
 }
