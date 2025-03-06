@@ -130,8 +130,7 @@ class MainMenuPanel extends JPanel {
                     // Create game frame.
                     JFrame gameFrame = new JFrame("Voronoi Conquest - Battle");
                     gameFrame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-                    // Global smartRisk; can be further configured if needed.
-                    double smartRisk = 0.5;
+                    double smartRisk = 0.5; // Global risk factor; can be configured further.
                     GamePanel gamePanel = new GamePanel(width, height, numRegions, numTeams, teamControls, smartRisk);
                     gameFrame.getContentPane().add(gamePanel);
                     gameFrame.pack();
@@ -184,7 +183,7 @@ class GamePanel extends JPanel {
         
         setPreferredSize(new Dimension(mapWidth, mapHeight));
         
-        // Initialize the game engine.
+        // Initialize game engine.
         engine = new GameEngine(mapWidth, mapHeight, numRegions, numTeams, teamControls, smartRisk);
         
         // Compute the Voronoi diagram (placeholder implementation).
@@ -192,6 +191,9 @@ class GamePanel extends JPanel {
         engine.setRegionAssignment(voronoi.getRegionAssignment());
         engine.setVoronoiImage(voronoi.getVoronoiImage());
         engine.refreshVoronoiImage();
+        
+        // If the starting team is AI-controlled, start its turn.
+        engine.startTurnIfAI();
         
         // Setup mouse listeners.
         addMouseListener(new MouseAdapter() {
@@ -282,7 +284,7 @@ class GameEngine {
             troops[i] = rand.nextInt(41) + 10; // 10 to 50 troops.
             isBastion[i] = false;
             combatPower[i] = troops[i] * 1.0;
-            regionTeam[i] = i % numTeams; // Round-robin assignment.
+            regionTeam[i] = i % numTeams;
             float brightness = computeBrightness(troops[i]);
             sites[i] = new Point(rand.nextInt(mapWidth), rand.nextInt(mapHeight));
             siteColors[i] = Color.getHSBColor(teamHues[regionTeam[i]], 1.0f, brightness);
@@ -336,6 +338,30 @@ class GameEngine {
         }
     }
     
+    /* --- Start Turn for AI --- */
+    public void startTurnIfAI() {
+        if (teamControls[currentTeam] != TeamControl.HOTSEAT) {
+            new javax.swing.Timer(500, new ActionListener() {
+                public void actionPerformed(ActionEvent e) {
+                    switch (teamControls[currentTeam]) {
+                        case DUMB:
+                            doDumbAIMove();
+                            break;
+                        case SMART:
+                            doSmartAIMove();
+                            break;
+                        case LOSING:
+                            doLosingIsFunAIMove();
+                            break;
+                        default:
+                            break;
+                    }
+                    ((javax.swing.Timer)e.getSource()).stop();
+                }
+            }).start();
+        }
+    }
+    
     /* --- Mouse Interaction --- */
     public void handleMouseClick(MouseEvent e) {
         int x = e.getX();
@@ -343,7 +369,7 @@ class GameEngine {
         if (!isValidCoordinate(x, y)) return;
         int clickedRegion = regionAssignment[x][y];
         
-        // Right-click: reinforcement move (self-reinforcement).
+        // Right-click: reinforcement move (self).
         if (SwingUtilities.isRightMouseButton(e)) {
             if (regionTeam[clickedRegion] == currentTeam && troops[clickedRegion] >= 10) {
                 executeReinforce(clickedRegion, clickedRegion);
@@ -352,7 +378,7 @@ class GameEngine {
             return;
         }
         
-        // Double-click: toggle region to become a bastion.
+        // Double-click: toggle bastion.
         if (e.getClickCount() >= 2) {
             if (!isBastion[clickedRegion]) {
                 isBastion[clickedRegion] = true;
@@ -364,7 +390,7 @@ class GameEngine {
             return;
         }
         
-        // Left-click: only allow if current team is controlled by Hotseat.
+        // Left-click: only allow if current team is Hotseat.
         if (teamControls[currentTeam] != TeamControl.HOTSEAT) return;
         
         if (selectedRegion == -1) {
@@ -380,18 +406,17 @@ class GameEngine {
             System.out.println("Selected source region: " + selectedRegion);
         } else {
             if (clickedRegion == selectedRegion) {
-                selectedRegion = -1; // Deselect.
+                selectedRegion = -1;
                 return;
             }
             if (!adjacent[selectedRegion][clickedRegion]) {
                 System.out.println("Region " + clickedRegion + " is not adjacent to region " + selectedRegion);
                 return;
             }
-            // If both regions belong to the same team, reinforce.
             if (regionTeam[selectedRegion] == regionTeam[clickedRegion]) {
                 executeReinforce(selectedRegion, clickedRegion);
                 selectedRegion = -1;
-            } else { // Otherwise, attack.
+            } else {
                 executeMove(selectedRegion, clickedRegion);
                 selectedRegion = -1;
                 endTurn();
@@ -421,12 +446,22 @@ class GameEngine {
         // Draw current team indicator.
         g2d.setColor(Color.BLACK);
         g2d.drawString("Current Turn: " + teamNames[currentTeam] + " (" + teamControls[currentTeam] + ")", 10, 20);
-        // If hovering, display region stats.
+        // If hovering, display region stats with improved readability.
         if (highlightedRegion != -1) {
             String text = "Troops: " + troops[highlightedRegion] + " | Power: " + String.format("%.1f", combatPower[highlightedRegion]);
+            Font originalFont = g2d.getFont();
+            g2d.setFont(new Font("SansSerif", Font.BOLD, 14));
+            FontMetrics fm = g2d.getFontMetrics();
+            int textWidth = fm.stringWidth(text);
+            int textHeight = fm.getHeight();
+            // Draw semi-transparent black rectangle as background.
+            g2d.setColor(new Color(0, 0, 0, 150));
+            g2d.fillRect(mouseX + 10, mouseY + 10 - fm.getAscent(), textWidth, textHeight);
+            g2d.setColor(Color.WHITE);
             g2d.drawString(text, mouseX + 10, mouseY + 10);
+            g2d.setFont(originalFont);
         }
-        // Draw a black outline around the selected region.
+        // Draw black outline around the selected region.
         if (selectedRegion != -1) {
             g2d.setColor(Color.BLACK);
             for (int x = 0; x < mapWidth; x++) {
@@ -444,7 +479,7 @@ class GameEngine {
                 }
             }
         }
-        // Draw an arrow to indicate the last move.
+        // Draw arrow for last move.
         if (lastMoveSource != -1 && lastMoveDest != -1) {
             g2d.setColor(Color.MAGENTA);
             Point from = sites[lastMoveSource];
@@ -453,7 +488,6 @@ class GameEngine {
         }
     }
     
-    // Draws an arrow from (x1, y1) to (x2, y2).
     private void drawArrow(Graphics2D g2d, int x1, int y1, int x2, int y2) {
         g2d.drawLine(x1, y1, x2, y2);
         double angle = Math.atan2(y2 - y1, x2 - x1);
@@ -548,7 +582,6 @@ class GameEngine {
             currentTeam = (currentTeam + 1) % numTeams;
         }
         System.out.println("Turn ended. Current turn: " + teamNames[currentTeam] + " (" + teamControls[currentTeam] + ")");
-        // If the current team is AI-controlled, schedule an AI move.
         if (teamControls[currentTeam] != TeamControl.HOTSEAT) {
             new javax.swing.Timer(500, new ActionListener() {
                 public void actionPerformed(ActionEvent e) {
@@ -578,7 +611,6 @@ class GameEngine {
         return false;
     }
     
-    // Dumb AI: Chooses a random valid move.
     private void doDumbAIMove() {
         List<int[]> moves = new ArrayList<>();
         for (int i = 0; i < numRegions; i++) {
@@ -607,7 +639,6 @@ class GameEngine {
         }
     }
     
-    // Smart AI: Chooses the move with the highest positive score.
     private void doSmartAIMove() {
         double bestScore = Double.NEGATIVE_INFINITY;
         int[] bestMove = null;
@@ -653,7 +684,6 @@ class GameEngine {
         }
     }
     
-    // Losing is Fun AI: Chooses the move with the worst (lowest) score.
     private void doLosingIsFunAIMove() {
         double worstScore = Double.POSITIVE_INFINITY;
         int[] worstMove = null;
@@ -696,8 +726,7 @@ class GameEngine {
     }
 }
 
-/* FortuneVoronoi: Computes the Voronoi diagram.
-   NOTE: This is a placeholder implementation using a simple nearest-neighbor approach.
+/* FortuneVoronoi: Computes a simple Voronoi diagram using a nearest-neighbor approach.
    A full implementation of Fortune's algorithm would be much more complex. */
 class FortuneVoronoi {
     private int[][] regionAssignment;
