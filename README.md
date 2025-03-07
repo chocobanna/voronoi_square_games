@@ -7,3 +7,4 @@ Built using ChatGPT o3-mid high.
 - https://www.redblobgames.com/articles/noise/introduction.html
 - http://www-cs-students.stanford.edu/~amitp/game-programming/polygon-map-generation/
 - https://en.wikipedia.org/wiki/Dijkstra%27s_algorithm
+- https://en.wikipedia.org/wiki/A*_search_algorithm
