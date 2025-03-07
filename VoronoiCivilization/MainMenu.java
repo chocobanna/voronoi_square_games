@@ -9,17 +9,15 @@ public class MainMenu extends JFrame {
 
         voronoiPanel = new TerrainVoronoiDiagram();
         
-        // Create a label to display the area.
+        // Label to display area and biome.
         JLabel areaLabel = new JLabel("Area: ");
         voronoiPanel.setAreaLabel(areaLabel);
 
-        // Set up the frame layout.
         setLayout(new BorderLayout());
-        // Place the diagram panel in a scroll pane (optional – panning/zooming are handled internally).
         add(new JScrollPane(voronoiPanel), BorderLayout.CENTER);
         add(areaLabel, BorderLayout.SOUTH);
 
-        // Create menu bar with a Setup option.
+        // Menu bar with a Setup option.
         JMenuBar menuBar = new JMenuBar();
         JMenu fileMenu = new JMenu("File");
 
@@ -40,25 +38,31 @@ public class MainMenu extends JFrame {
     }
 
     /**
-     * Open a dialog to adjust parameters.
+     * Opens a dialog to adjust parameters: number of sites, margin, map width, and map height.
      */
     private void openSetupDialog() {
         JDialog dialog = new JDialog(this, "Setup Parameters", true);
-        dialog.setLayout(new GridLayout(3, 2, 10, 10));
-        dialog.setSize(300, 150);
+        dialog.setLayout(new GridLayout(5, 2, 10, 10));
+        dialog.setSize(300, 250);
         dialog.setLocationRelativeTo(this);
 
         JLabel sitesLabel = new JLabel("Number of Sites:");
-        JTextField sitesField = new JTextField(String.valueOf(10)); // default value
+        JTextField sitesField = new JTextField(String.valueOf(10));
         JLabel marginLabel = new JLabel("Margin:");
-        JTextField marginField = new JTextField(String.valueOf(50)); // default value
+        JTextField marginField = new JTextField(String.valueOf(50));
+        JLabel widthLabel = new JLabel("Map Width:");
+        JTextField widthField = new JTextField(String.valueOf(800));
+        JLabel heightLabel = new JLabel("Map Height:");
+        JTextField heightField = new JTextField(String.valueOf(800));
 
         JButton applyButton = new JButton("Apply");
         applyButton.addActionListener(e -> {
             try {
                 int newSites = Integer.parseInt(sitesField.getText().trim());
                 int newMargin = Integer.parseInt(marginField.getText().trim());
-                voronoiPanel.updateParameters(newSites, newMargin);
+                int newWidth = Integer.parseInt(widthField.getText().trim());
+                int newHeight = Integer.parseInt(heightField.getText().trim());
+                voronoiPanel.updateParameters(newSites, newMargin, newWidth, newHeight);
                 dialog.dispose();
             } catch (NumberFormatException ex) {
                 JOptionPane.showMessageDialog(dialog, "Please enter valid numbers.", "Error", JOptionPane.ERROR_MESSAGE);
@@ -72,6 +76,10 @@ public class MainMenu extends JFrame {
         dialog.add(sitesField);
         dialog.add(marginLabel);
         dialog.add(marginField);
+        dialog.add(widthLabel);
+        dialog.add(widthField);
+        dialog.add(heightLabel);
+        dialog.add(heightField);
         dialog.add(applyButton);
         dialog.add(cancelButton);
 
