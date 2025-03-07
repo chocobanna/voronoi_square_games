@@ -5,3 +5,4 @@ Built using ChatGPT o3-mid high.
 - https://en.wikipedia.org/wiki/Fortune%27s_algorithm
 - https://en.wikipedia.org/wiki/Voronoi_diagram
 - https://www.redblobgames.com/articles/noise/introduction.html
+- http://www-cs-students.stanford.edu/~amitp/game-programming/polygon-map-generation/
