@@ -1,21 +1,24 @@
 import java.awt.*;
 import java.awt.event.*;
-import java.awt.geom.Path2D;
 import java.awt.geom.Point2D;
-import java.util.ArrayList;
-import java.util.List;
+import java.awt.geom.QuadCurve2D;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.PriorityQueue;
 import javax.swing.*;
+
 
 public class TerrainVoronoiDiagram extends JPanel {
     // Map dimensions (modifiable).
     private int mapWidth = 800;
     private int mapHeight = 800;
     
-    // Parameters that can be updated.
+    // Parameters.
     private int numSites = 10;
     private int margin = 50; // Extra margin for SEA along borders
 
-    // Conversion: 1 pixel equals 0.01 km (10 meters per pixel).
+    // Conversion: 1 pixel equals 0.01 km (i.e. 10 meters per pixel).
     private static final double PIXEL_TO_KM = 0.01;
 
     // Panning and zooming.
@@ -26,82 +29,142 @@ public class TerrainVoronoiDiagram extends JPanel {
 
     // Define biome types.
     public enum Terrain {
-        SEA, PLAINS, DESERT, FOREST, MOUNTAINS
+        SEA, PLAINS, FARMLAND, FOREST, MOUNTAINS
     }
 
-    private List<Point> sites;
-    private List<Terrain> terrains;
-    private JLabel areaLabel;  // Displays the area and biome of the hovered cell
+    private java.util.List<Point> sites;
+    private java.util.List<Terrain> terrains;
+    private JLabel infoLabel;  // Displays simulation messages/info
 
     // For interaction.
     private int hoveredSiteIndex = -1;
     private int selectedSiteIndex = -1;
 
-    // List of river paths (each a list of Points).
-    private List<List<Point>> riverPaths = new ArrayList<>();
+    // Civilization seeds.
+    private java.util.List<CivSeed> civSeeds = new java.util.ArrayList<>();
+    private boolean placingSeed = false;  // When true, next click places a seed
+
+    // Road & budding thresholds.
+    private static final int ROAD_NEIGHBORS = 5; // For graph construction
+    private static final int ROAD_DISTANCE_THRESHOLD = 150;
+    private static final double GROWTH_THRESHOLD = 5.0;
+    private static final int BUDDING_DISTANCE_THRESHOLD = 200;
+    private static final double BUDDING_PROBABILITY = 0.2;
+
+    // Resource nodes.
+    private java.util.List<ResourceNode> resourceNodes = new java.util.ArrayList<>();
+
+    // Farmland conversion: conversion radius.
+    private static final int FARMLAND_CONVERSION_DISTANCE = 80; // pixels
+
+    // ----- Inner Classes -----
+
+    // Civilization seed.
+    private class CivSeed {
+        Point location;
+        int level; // 1: Village, 2: Town, 3: City
+        double growthCounter;
+        int population;
+        int infrastructureLevel; // Starts at 1
+        String faction; // "Red" or "Blue"
+        public CivSeed(Point loc) {
+            this.location = loc;
+            this.level = 1;
+            this.growthCounter = 0;
+            this.population = 100;
+            this.infrastructureLevel = 1;
+            this.faction = (Math.random() < 0.5) ? "Red" : "Blue";
+        }
+    }
+
+    // Resource node.
+    private class ResourceNode {
+        Point location;
+        String type; // "Ore", "Lumber", "Fertile"
+        int amount;
+        public ResourceNode(Point loc, String type, int amount) {
+            this.location = loc;
+            this.type = type;
+            this.amount = amount;
+        }
+    }
+
+    // For optimal road routing: graph edge.
+    private class Edge {
+        int to;
+        double cost;
+        public Edge(int to, double cost) {
+            this.to = to;
+            this.cost = cost;
+        }
+    }
 
     public TerrainVoronoiDiagram() {
         setPreferredSize(new Dimension(mapWidth, mapHeight));
         setBackground(Color.WHITE);
-        sites = new ArrayList<>();
-        terrains = new ArrayList<>();
+        sites = new java.util.ArrayList<>();
+        terrains = new java.util.ArrayList<>();
         generateSitesAndTerrains();
+        generateResourceNodes();
         addInteractionListeners();
     }
 
-    /**
-     * Generate random sites and assign each a biome based on its elevation.
-     * Then simulate rivers.
-     */
+    // ----- Generation Methods -----
+
     private void generateSitesAndTerrains() {
         sites.clear();
         terrains.clear();
         for (int i = 0; i < numSites; i++) {
-            int x = (int) (Math.random() * mapWidth);
-            int y = (int) (Math.random() * mapHeight);
+            int x = (int)(Math.random() * mapWidth);
+            int y = (int)(Math.random() * mapHeight);
             Point site = new Point(x, y);
             sites.add(site);
             terrains.add(getTerrainForSite(site));
         }
-        simulateRivers();
     }
 
-    /**
-     * A simple noise-based elevation function.
-     * Uses a low frequency sine–cosine combination to yield smooth variations.
-     * Returns a value in [0,1] where higher values represent higher elevation.
-     */
+    private void generateResourceNodes() {
+        resourceNodes.clear();
+        int numNodes = Math.max(1, numSites / 2);
+        for (int i = 0; i < numNodes; i++) {
+            int x = (int)(Math.random() * mapWidth);
+            int y = (int)(Math.random() * mapHeight);
+            Point loc = new Point(x, y);
+            Terrain t = getTerrainForSite(loc);
+            String type;
+            int amount;
+            if(t == Terrain.MOUNTAINS) {
+                type = "Ore";
+                amount = 200;
+            } else if(t == Terrain.FOREST) {
+                type = "Lumber";
+                amount = 150;
+            } else if(t == Terrain.PLAINS) {
+                type = "Fertile";
+                amount = 180;
+            } else {
+                continue;
+            }
+            resourceNodes.add(new ResourceNode(loc, type, amount));
+        }
+    }
+
+    // ----- Elevation & Biome Methods -----
+
     private double getElevation(double x, double y) {
-        double frequency = 0.005; // Adjust for smoothness
+        double frequency = 0.005;
         double elev = Math.sin(x * frequency) * Math.cos(y * frequency);
-        elev = (elev + 1) / 2; // Normalize to [0,1]
-        return elev;
+        return (elev + 1) / 2;
     }
 
-    /**
-     * Determine the biome for a given site.
-     * - If the site is near the map edge (or its elevation is low), it becomes SEA.
-     * - Otherwise, the elevation (modulated by island shape) determines the biome:
-     *     elevation < 0.3 -> DESERT,
-     *     elevation < 0.5 -> PLAINS,
-     *     elevation < 0.7 -> FOREST,
-     *     otherwise      -> MOUNTAINS.
-     */
     private Terrain getTerrainForSite(Point p) {
-        // Compute normalized distance from center for an island effect.
-        double cx = mapWidth / 2.0;
-        double cy = mapHeight / 2.0;
-        double dx = (p.x - cx) / cx;
-        double dy = (p.y - cy) / cy;
-        double distance = Math.sqrt(dx * dx + dy * dy);  // roughly in [0,√2]
-        
-        // Force SEA if near the edge (or if elevation is very low).
+        double cx = mapWidth / 2.0, cy = mapHeight / 2.0;
+        double dx = (p.x - cx) / cx, dy = (p.y - cy) / cy;
+        double distance = Math.sqrt(dx * dx + dy * dy);
         double elev = getElevation(p.x, p.y);
         if (distance > 0.8 || elev < 0.3) {
             return Terrain.SEA;
         }
-        
-        // Refine biome using elevation.
         if (elev < 0.5)
             return Terrain.PLAINS;
         else if (elev < 0.7)
@@ -110,30 +173,25 @@ public class TerrainVoronoiDiagram extends JPanel {
             return Terrain.MOUNTAINS;
     }
 
-    /**
-     * Returns a color for each biome.
-     */
     private Color getTerrainColor(Terrain terrain) {
         switch (terrain) {
             case SEA:        return new Color(0, 102, 204);
             case PLAINS:     return new Color(102, 204, 0);
-            case DESERT:     return new Color(255, 204, 102);
+            case FARMLAND:   return new Color(210, 180, 140);
             case FOREST:     return new Color(34, 139, 34);
             case MOUNTAINS:  return new Color(128, 128, 128);
             default:         return Color.LIGHT_GRAY;
         }
     }
 
-    /**
-     * Computes the Voronoi cell (convex polygon) for a given site by clipping the map rectangle.
-     */
+    // ----- Voronoi Cell Computation -----
+
     private Polygon getVoronoiCell(Point p) {
-        List<Point2D.Double> poly = new ArrayList<>();
+        java.util.List<Point2D.Double> poly = new java.util.ArrayList<>();
         poly.add(new Point2D.Double(0, 0));
         poly.add(new Point2D.Double(mapWidth, 0));
         poly.add(new Point2D.Double(mapWidth, mapHeight));
         poly.add(new Point2D.Double(0, mapHeight));
-
         for (Point q : sites) {
             if (q.equals(p)) continue;
             double A = p.x - q.x;
@@ -144,26 +202,21 @@ public class TerrainVoronoiDiagram extends JPanel {
             poly = clipPolygon(poly, A, B, C);
             if (poly.isEmpty()) break;
         }
-
         Polygon awtPoly = new Polygon();
         for (Point2D.Double pt : poly) {
-            awtPoly.addPoint((int) Math.round(pt.x), (int) Math.round(pt.y));
+            awtPoly.addPoint((int)Math.round(pt.x), (int)Math.round(pt.y));
         }
         return awtPoly;
     }
 
-    /**
-     * Clips a polygon with the half-plane defined by A*x + B*y + C >= 0 using the Sutherland–Hodgman algorithm.
-     */
-    private List<Point2D.Double> clipPolygon(List<Point2D.Double> poly, double A, double B, double C) {
-        List<Point2D.Double> newPoly = new ArrayList<>();
+    private java.util.List<Point2D.Double> clipPolygon(java.util.List<Point2D.Double> poly, double A, double B, double C) {
+        java.util.List<Point2D.Double> newPoly = new java.util.ArrayList<>();
         int size = poly.size();
         for (int i = 0; i < size; i++) {
             Point2D.Double current = poly.get(i);
             Point2D.Double next = poly.get((i + 1) % size);
             boolean currentInside = (A * current.x + B * current.y + C >= 0);
             boolean nextInside = (A * next.x + B * next.y + C >= 0);
-
             if (currentInside && nextInside) {
                 newPoly.add(next);
             } else if (currentInside && !nextInside) {
@@ -178,21 +231,14 @@ public class TerrainVoronoiDiagram extends JPanel {
         return newPoly;
     }
 
-    /**
-     * Computes the intersection of the segment (p1, p2) with the line A*x + B*y + C = 0.
-     */
     private Point2D.Double getIntersection(Point2D.Double p1, Point2D.Double p2, double A, double B, double C) {
-        double dx = p2.x - p1.x;
-        double dy = p2.y - p1.y;
+        double dx = p2.x - p1.x, dy = p2.y - p1.y;
         double denom = A * dx + B * dy;
         if (denom == 0) return null;
         double t = -(A * p1.x + B * p1.y + C) / denom;
         return new Point2D.Double(p1.x + t * dx, p1.y + t * dy);
     }
 
-    /**
-     * Computes the area of a polygon using the shoelace formula.
-     */
     private double computeArea(Polygon poly) {
         double area = 0;
         int n = poly.npoints;
@@ -203,26 +249,42 @@ public class TerrainVoronoiDiagram extends JPanel {
         return Math.abs(area) / 2.0;
     }
 
-    /**
-     * Sets the JLabel that displays the area and biome.
-     */
-    public void setAreaLabel(JLabel label) {
-        this.areaLabel = label;
+    // ----- Civilization Seed Helper Methods -----
+
+    private int getCellIndexForPoint(Point p) {
+        double minDist = Double.MAX_VALUE;
+        int index = -1;
+        for (int i = 0; i < sites.size(); i++) {
+            double d = p.distance(sites.get(i));
+            if (d < minDist) {
+                minDist = d;
+                index = i;
+            }
+        }
+        return index;
     }
 
-    /**
-     * Regenerates the diagram.
-     */
+    private boolean cellOccupied(int cellIndex) {
+        for (CivSeed seed : civSeeds) {
+            if (getCellIndexForPoint(seed.location) == cellIndex) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public void setAreaLabel(JLabel label) {
+        this.infoLabel = label;
+    }
+
     public void regenerateDiagram() {
         generateSitesAndTerrains();
+        generateResourceNodes();
         hoveredSiteIndex = -1;
         selectedSiteIndex = -1;
         repaint();
     }
 
-    /**
-     * Updates parameters: number of sites, margin, and map dimensions.
-     */
     public void updateParameters(int numSites, int margin, int width, int height) {
         this.numSites = numSites;
         this.margin = margin;
@@ -232,62 +294,175 @@ public class TerrainVoronoiDiagram extends JPanel {
         regenerateDiagram();
     }
 
-    /**
-     * Simulate river generation.
-     * This method finds one high-elevation site and simulates a river
-     * flowing downhill by choosing nearby points with lower elevation.
-     */
-    private void simulateRivers() {
-        riverPaths.clear();
-        // Collect candidate sources (sites with elevation above 0.8).
-        List<Point> highSites = new ArrayList<>();
-        for (Point site : sites) {
-            double elev = getElevation(site.x, site.y);
-            if (elev > 0.8) {
-                highSites.add(site);
-            }
-        }
-        if (highSites.isEmpty()) return;
-        // Choose one random source.
-        Point source = highSites.get((int)(Math.random() * highSites.size()));
-        List<Point> river = new ArrayList<>();
-        river.add(source);
-        Point current = source;
-        int iterations = 0;
-        while (iterations < 1000) {
-            double currentElev = getElevation(current.x, current.y);
-            if (currentElev < 0.3) break; // Reached low elevation (water)
-            // Check neighbors (in steps of 5 pixels).
-            Point next = null;
-            double minElev = currentElev;
-            for (int dx = -5; dx <= 5; dx += 5) {
-                for (int dy = -5; dy <= 5; dy += 5) {
-                    if (dx == 0 && dy == 0) continue;
-                    int nx = current.x + dx;
-                    int ny = current.y + dy;
-                    if (nx < 0 || ny < 0 || nx >= mapWidth || ny >= mapHeight) continue;
-                    double neighborElev = getElevation(nx, ny);
-                    if (neighborElev < minElev) {
-                        minElev = neighborElev;
-                        next = new Point(nx, ny);
-                    }
-                }
-            }
-            if (next == null) break;
-            river.add(next);
-            current = next;
-            iterations++;
-        }
-        if (river.size() > 1) {
-            riverPaths.add(river);
+    // Prevent seeds from being placed in ocean.
+    public void setPlacingSeed(boolean placing) {
+        placingSeed = placing;
+        if (infoLabel != null && placing) {
+            infoLabel.setText("Click on a cell (non-ocean) to place a civilization seed (village).");
         }
     }
 
-    /**
-     * Adds listeners for panning, zooming, and cell interaction.
-     */
+    public void addCivilizationSeed(Point p) {
+        int cellIndex = getCellIndexForPoint(p);
+        if (getTerrainForSite(sites.get(cellIndex)) == Terrain.SEA) {
+            if (infoLabel != null) {
+                infoLabel.setText("Cannot place seed in ocean tile.");
+            }
+            return;
+        }
+        if (cellOccupied(cellIndex)) {
+            if (infoLabel != null) {
+                infoLabel.setText("That cell already has a civilization seed.");
+            }
+            return;
+        }
+        civSeeds.add(new CivSeed(sites.get(cellIndex)));
+        repaint();
+    }
+
+    // ----- Optimal Road Routing via Dual Graph (Dijkstra) -----
+
+    private java.util.List<java.util.List<Edge>> buildGraph() {
+        int n = sites.size();
+        int k = Math.min(ROAD_NEIGHBORS, n - 1);
+        java.util.List<java.util.List<Edge>> graph = new java.util.ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            graph.add(new java.util.ArrayList<>());
+        }
+        for (int i = 0; i < n; i++) {
+            java.util.List<int[]> candidates = new java.util.ArrayList<>();
+            for (int j = 0; j < n; j++) {
+                if (i == j) continue;
+                double dist = sites.get(i).distance(sites.get(j));
+                candidates.add(new int[]{j, (int)(dist * 1000)});
+            }
+            candidates.sort(Comparator.comparingInt(a -> a[1]));
+            for (int m = 0; m < k && m < candidates.size(); m++) {
+                int j = candidates.get(m)[0];
+                double cost = sites.get(i).distance(sites.get(j));
+                graph.get(i).add(new Edge(j, cost));
+                graph.get(j).add(new Edge(i, cost));
+            }
+        }
+        return graph;
+    }
+
+    private java.util.List<Integer> computeShortestPath(int start, int end) {
+        int n = sites.size();
+        double[] dist = new double[n];
+        int[] prev = new int[n];
+        Arrays.fill(dist, Double.MAX_VALUE);
+        Arrays.fill(prev, -1);
+        dist[start] = 0;
+        
+        PriorityQueue<int[]> queue = new PriorityQueue<>(Comparator.comparingDouble((int[] a) -> a[1]));
+        queue.add(new int[]{start, 0});
+        
+        java.util.List<java.util.List<Edge>> graph = buildGraph();
+        
+        while (!queue.isEmpty()) {
+            int[] cur = queue.poll();
+            int u = cur[0];
+            double d = cur[1];
+            if (d > dist[u]) continue;
+            if (u == end) break;
+            for (Edge edge : graph.get(u)) {
+                int v = edge.to;
+                double nd = dist[u] + edge.cost;
+                if (nd < dist[v]) {
+                    dist[v] = nd;
+                    prev[v] = u;
+                    queue.add(new int[]{v, (int)(nd * 1000)});
+                }
+            }
+        }
+        if (dist[end] == Double.MAX_VALUE) return null;
+        java.util.List<Integer> path = new java.util.ArrayList<>();
+        for (int at = end; at != -1; at = prev[at]) {
+            path.add(at);
+        }
+        Collections.reverse(path);
+        return path;
+    }
+
+
+    private java.util.List<Point> getOptimalRoadPath(CivSeed seed1, CivSeed seed2) {
+        int startIndex = getCellIndexForPoint(seed1.location);
+        int endIndex = getCellIndexForPoint(seed2.location);
+        java.util.List<Integer> indicesPath = computeShortestPath(startIndex, endIndex);
+        if (indicesPath == null || indicesPath.size() < 2) return null;
+        java.util.List<Point> path = new java.util.ArrayList<>();
+        for (int idx : indicesPath) {
+            path.add(sites.get(idx));
+        }
+        return path;
+    }
+
+    // ----- Advance Time: Population, Infrastructure, Budding, Farmland Conversion -----
+
+    public void advanceTime() {
+        java.util.List<CivSeed> newSeeds = new java.util.ArrayList<>();
+        for (CivSeed seed : civSeeds) {
+            double growthIncrement = 1.0;
+            for (ResourceNode rn : resourceNodes) {
+                if (seed.location.distance(rn.location) < 100) {
+                    if (rn.type.equals("Ore") || rn.type.equals("Lumber"))
+                        growthIncrement += 0.5;
+                    else if (rn.type.equals("Fertile"))
+                        growthIncrement += 0.8;
+                }
+            }
+            int friendlyConnections = 0;
+            for (CivSeed other : civSeeds) {
+                if (other == seed) continue;
+                if (seed.faction.equals(other.faction) && seed.location.distance(other.location) < ROAD_DISTANCE_THRESHOLD)
+                    friendlyConnections++;
+            }
+            growthIncrement += 0.2 * seed.infrastructureLevel * friendlyConnections;
+            seed.growthCounter += growthIncrement;
+            if (seed.level == 1)
+                seed.population += 20;
+            else if (seed.level == 2)
+                seed.population += 40;
+            else
+                seed.population += 60;
+            if (seed.growthCounter >= GROWTH_THRESHOLD && seed.level < 3) {
+                seed.level++;
+                seed.growthCounter = 0;
+            }
+            if (seed.population > 1000 * seed.infrastructureLevel) {
+                seed.infrastructureLevel++;
+            }
+            if (seed.level == 3 && Math.random() < BUDDING_PROBABILITY) {
+                int parentCell = getCellIndexForPoint(seed.location);
+                for (int i = 0; i < sites.size(); i++) {
+                    if (i == parentCell) continue;
+                    if (seed.location.distance(sites.get(i)) < BUDDING_DISTANCE_THRESHOLD
+                        && !cellOccupied(i)
+                        && getTerrainForSite(sites.get(i)) != Terrain.SEA) {
+                        newSeeds.add(new CivSeed(sites.get(i)));
+                        break;
+                    }
+                }
+            }
+        }
+        civSeeds.addAll(newSeeds);
+        for (CivSeed seed : civSeeds) {
+            for (int i = 0; i < sites.size(); i++) {
+                if (seed.location.distance(sites.get(i)) < FARMLAND_CONVERSION_DISTANCE) {
+                    Terrain current = terrains.get(i);
+                    if (current == Terrain.PLAINS || current == Terrain.FOREST) {
+                        terrains.set(i, Terrain.FARMLAND);
+                    }
+                }
+            }
+        }
+        repaint();
+    }
+
+    // ----- Interaction Listeners -----
+
     private void addInteractionListeners() {
-        // Zoom with mouse wheel.
         addMouseWheelListener(e -> {
             int rotation = e.getWheelRotation();
             double oldScale = scale;
@@ -297,8 +472,6 @@ public class TerrainVoronoiDiagram extends JPanel {
             offsetY = p.y - ((p.y - offsetY) * (scale / oldScale));
             repaint();
         });
-
-        // Pan by dragging.
         addMouseListener(new MouseAdapter() {
             @Override
             public void mousePressed(MouseEvent e) {
@@ -316,42 +489,47 @@ public class TerrainVoronoiDiagram extends JPanel {
                     repaint();
                 }
             }
-
             @Override
             public void mouseMoved(MouseEvent e) {
-                int diagramX = (int) ((e.getX() - offsetX) / scale);
-                int diagramY = (int) ((e.getY() - offsetY) / scale);
-                double minDistSquared = Double.MAX_VALUE;
+                int diagramX = (int)((e.getX() - offsetX) / scale);
+                int diagramY = (int)((e.getY() - offsetY) / scale);
+                double minDist = Double.MAX_VALUE;
                 int nearestIndex = -1;
                 for (int i = 0; i < sites.size(); i++) {
                     Point site = sites.get(i);
-                    int dx = diagramX - site.x;
-                    int dy = diagramY - site.y;
-                    double d2 = dx * dx + dy * dy;
-                    if (d2 < minDistSquared) {
-                        minDistSquared = d2;
+                    double d2 = Math.pow(diagramX - site.x, 2) + Math.pow(diagramY - site.y, 2);
+                    if (d2 < minDist) {
+                        minDist = d2;
                         nearestIndex = i;
                     }
                 }
                 hoveredSiteIndex = nearestIndex;
-                if (areaLabel != null && hoveredSiteIndex != -1) {
+                if (infoLabel != null && hoveredSiteIndex != -1) {
                     Polygon cell = getVoronoiCell(sites.get(hoveredSiteIndex));
                     double areaPixels = computeArea(cell);
                     double areaKm = areaPixels * (PIXEL_TO_KM * PIXEL_TO_KM);
-                    Terrain biome = terrains.get(hoveredSiteIndex);
-                    areaLabel.setText(String.format("Area: %.2f km², Biome: %s", areaKm, biome.name()));
-                } else if (areaLabel != null) {
-                    areaLabel.setText("Area: ");
+                    Terrain biome = getTerrainForSite(sites.get(hoveredSiteIndex));
+                    infoLabel.setText(String.format("Area: %.2f km², Biome: %s", areaKm, biome.name()));
+                } else if (infoLabel != null) {
+                    infoLabel.setText("Area: ");
                 }
                 repaint();
             }
         });
-
-        // On click, select a cell.
         addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
-                selectedSiteIndex = hoveredSiteIndex;
+                if (placingSeed) {
+                    int diagramX = (int)((e.getX() - offsetX) / scale);
+                    int diagramY = (int)((e.getY() - offsetY) / scale);
+                    addCivilizationSeed(new Point(diagramX, diagramY));
+                    placingSeed = false;
+                    if (infoLabel != null) {
+                        infoLabel.setText("Civilization seed placed.");
+                    }
+                } else {
+                    selectedSiteIndex = hoveredSiteIndex;
+                }
                 repaint();
             }
         });
@@ -363,38 +541,80 @@ public class TerrainVoronoiDiagram extends JPanel {
         Graphics2D g2d = (Graphics2D) g.create();
         g2d.translate(offsetX, offsetY);
         g2d.scale(scale, scale);
-
         // Draw Voronoi cells.
         for (int i = 0; i < sites.size(); i++) {
             Polygon cell = getVoronoiCell(sites.get(i));
-            Terrain terrain = terrains.get(i);
+            Terrain terrain = getTerrainForSite(sites.get(i));
             Color terrainColor = getTerrainColor(terrain);
             g2d.setColor(terrainColor);
             g2d.fillPolygon(cell);
             g2d.setColor(terrainColor.darker());
             g2d.drawPolygon(cell);
         }
-
-        // Draw river paths.
-        g2d.setColor(Color.BLUE);
-        g2d.setStroke(new BasicStroke(2));
-        for (List<Point> river : riverPaths) {
-            Path2D.Double path = new Path2D.Double();
-            boolean first = true;
-            for (Point p : river) {
-                if (first) { path.moveTo(p.x, p.y); first = false; }
-                else { path.lineTo(p.x, p.y); }
-            }
-            g2d.draw(path);
+        // Draw resource nodes.
+        for (ResourceNode rn : resourceNodes) {
+            if (rn.type.equals("Ore"))
+                g2d.setColor(Color.GRAY);
+            else if (rn.type.equals("Lumber"))
+                g2d.setColor(new Color(34,139,34));
+            else if (rn.type.equals("Fertile"))
+                g2d.setColor(Color.YELLOW);
+            else
+                g2d.setColor(Color.WHITE);
+            g2d.fillOval(rn.location.x - 4, rn.location.y - 4, 8, 8);
         }
-
+        // Draw roads along the optimal path.
+        g2d.setStroke(new BasicStroke(2));
+        for (int i = 0; i < civSeeds.size(); i++) {
+            CivSeed seed1 = civSeeds.get(i);
+            if (seed1.level < 2) continue;
+            for (int j = i + 1; j < civSeeds.size(); j++) {
+                CivSeed seed2 = civSeeds.get(j);
+                if (seed2.level < 2) continue;
+                java.util.List<Point> roadPath = getOptimalRoadPath(seed1, seed2);
+                if (roadPath == null || roadPath.size() < 2) continue;
+                // Draw each segment with a curve.
+                for (int k = 0; k < roadPath.size() - 1; k++) {
+                    Point p1 = roadPath.get(k);
+                    Point p2 = roadPath.get(k+1);
+                    int mx = (p1.x + p2.x) / 2;
+                    int my = (p1.y + p2.y) / 2;
+                    int dx = p2.x - p1.x;
+                    int dy = p2.y - p1.y;
+                    double len = Math.sqrt(dx * dx + dy * dy);
+                    double offsetAmount = len * 0.2;
+                    double px = -dy / len;
+                    double py = dx / len;
+                    int cx = mx + (int)(px * offsetAmount);
+                    int cy = my + (int)(py * offsetAmount);
+                    QuadCurve2D.Double curve = new QuadCurve2D.Double(
+                        p1.x, p1.y,
+                        cx, cy,
+                        p2.x, p2.y
+                    );
+                    Color roadColor = seed1.faction.equals(seed2.faction) ? Color.GREEN : Color.RED;
+                    g2d.setColor(roadColor);
+                    g2d.draw(curve);
+                }
+            }
+        }
+        // Draw civilization seeds.
+        for (CivSeed seed : civSeeds) {
+            int size = 10 + (seed.level - 1) * 5;
+            Color fill = (seed.level == 1) ? Color.RED : (seed.level == 2 ? Color.ORANGE : Color.MAGENTA);
+            g2d.setColor(fill);
+            g2d.fillOval(seed.location.x - size/2, seed.location.y - size/2, size, size);
+            g2d.setColor(Color.BLACK);
+            String label = (seed.level == 1) ? "Village" : (seed.level == 2 ? "Town" : "City");
+            g2d.drawString(label + " (" + seed.faction + ") Pop:" + seed.population + " Infra:" + seed.infrastructureLevel,
+                           seed.location.x + size, seed.location.y);
+        }
         // Highlight hovered cell.
         if (hoveredSiteIndex != -1) {
             Polygon hoveredCell = getVoronoiCell(sites.get(hoveredSiteIndex));
             g2d.setColor(new Color(255, 255, 255, 100));
             g2d.fillPolygon(hoveredCell);
         }
-
         // Outline selected cell.
         if (selectedSiteIndex != -1) {
             Polygon selectedCell = getVoronoiCell(sites.get(selectedSiteIndex));
@@ -402,7 +622,6 @@ public class TerrainVoronoiDiagram extends JPanel {
             g2d.setStroke(new BasicStroke(3));
             g2d.drawPolygon(selectedCell);
         }
-
         // Draw site points.
         g2d.setColor(Color.BLACK);
         for (Point site : sites) {
@@ -410,7 +629,7 @@ public class TerrainVoronoiDiagram extends JPanel {
         }
         g2d.dispose();
     }
-    
+
     @Override
     public Dimension getPreferredSize() {
         return new Dimension(mapWidth, mapHeight);
