@@ -2,7 +2,7 @@ package main;
 
 import javax.swing.*;
 import java.awt.*;
-import java.awt.event.MouseEvent;  // Added import for MouseEvent
+import java.awt.event.MouseEvent;
 import java.awt.image.BufferedImage;
 import java.util.Random;
 import java.util.concurrent.ExecutorService;
@@ -10,7 +10,7 @@ import java.util.concurrent.Executors;
 
 public class GameEngine {
     private int mapWidth, mapHeight, numRegions, numTeams;
-    private double smartRisk;
+    double smartRisk; // Made package-visible for AI access via getter
     private TeamControl[] teamControls;
 
     // Region data.
@@ -111,10 +111,10 @@ public class GameEngine {
                 } catch (InterruptedException ex) { }
                 switch (teamControls[currentTeam]) {
                     case DUMB:
-                        doDumbAIMove();
+                        mods.DumbAI.doMove(this);
                         break;
                     case SMART:
-                        doSmartAIMove();
+                        mods.SmartAI.doMove(this);
                         break;
                     default:
                         break;
@@ -378,10 +378,10 @@ public class GameEngine {
                 SwingUtilities.invokeLater(() -> {
                     switch (teamControls[currentTeam]) {
                         case DUMB:
-                            doDumbAIMove();
+                            mods.DumbAI.doMove(this);
                             break;
                         case SMART:
-                            doSmartAIMove();
+                            mods.SmartAI.doMove(this);
                             break;
                         default:
                             break;
@@ -406,81 +406,40 @@ public class GameEngine {
         return true;
     }
 
-    private void doDumbAIMove() {
-        aiExecutor.submit(() -> {
-            java.util.List<int[]> moves = new java.util.ArrayList<>();
-            for (int i = 0; i < numRegions; i++) {
-                if (regionTeam[i] == currentTeam && troops[i] > 0) {
-                    for (int j = 0; j < numRegions; j++) {
-                        if (adjacent[i][j]) {
-                            moves.add(new int[]{i, j});
-                        }
-                    }
-                }
-            }
-            if (moves.isEmpty()) {
-                System.out.println("Dumb AI (" + teamNames[currentTeam] + ") has no valid moves. Skipping turn.");
-                SwingUtilities.invokeLater(this::endTurn);
-                return;
-            }
-            int[] move = moves.get(rand.nextInt(moves.size()));
-            SwingUtilities.invokeLater(() -> {
-                if (regionTeam[move[0]] == regionTeam[move[1]]) {
-                    System.out.println("Dumb AI (" + teamNames[currentTeam] + ") reinforces region " + move[1]);
-                    executeReinforce(move[0], move[1]);
-                } else {
-                    System.out.println("Dumb AI (" + teamNames[currentTeam] + ") attacks from region " + move[0] + " to region " + move[1]);
-                    executeMove(move[0], move[1]);
-                }
-                endTurn();
-            });
-        });
+    // --- Getters for AI access ---
+    public int getNumRegions() {
+        return numRegions;
     }
 
-    private void doSmartAIMove() {
-        aiExecutor.submit(() -> {
-            double bestScore = Double.NEGATIVE_INFINITY;
-            int[] bestMove = null;
-            boolean isFriendly = false;
-            for (int i = 0; i < numRegions; i++) {
-                if (regionTeam[i] == currentTeam && troops[i] > 0) {
-                    for (int j = 0; j < numRegions; j++) {
-                        if (adjacent[i][j]) {
-                            double score;
-                            if (regionTeam[i] == regionTeam[j]) {
-                                score = 2 * troops[i];
-                            } else {
-                                double sourcePower = combatPower[i];
-                                double destPower = combatPower[j];
-                                score = (sourcePower > destPower) ? (sourcePower - destPower) * (1 - smartRisk) : -1000;
-                            }
-                            if (score > bestScore) {
-                                bestScore = score;
-                                bestMove = new int[]{i, j};
-                                isFriendly = (regionTeam[i] == regionTeam[j]);
-                            }
-                        }
-                    }
-                }
-            }
-            final int[] move = bestMove;
-            final double score = bestScore;
-            final boolean friendly = isFriendly;
-            SwingUtilities.invokeLater(() -> {
-                if (move == null || score <= 0) {
-                    System.out.println("Smart AI (" + teamNames[currentTeam] + ") found no advantageous moves. Skipping turn.");
-                    endTurn();
-                    return;
-                }
-                if (friendly) {
-                    System.out.println("Smart AI (" + teamNames[currentTeam] + ") reinforces from region " + move[0] + " to region " + move[1] + " with score " + score);
-                    executeReinforce(move[0], move[1]);
-                } else {
-                    System.out.println("Smart AI (" + teamNames[currentTeam] + ") attacks from region " + move[0] + " to region " + move[1] + " with score " + score);
-                    executeMove(move[0], move[1]);
-                }
-                endTurn();
-            });
-        });
+    public int[] getRegionTeam() {
+        return regionTeam;
+    }
+
+    public int[] getTroops() {
+        return troops;
+    }
+
+    public boolean[][] getAdjacent() {
+        return adjacent;
+    }
+
+    public double[] getCombatPower() {
+        return combatPower;
+    }
+
+    public String[] getTeamNames() {
+        return teamNames;
+    }
+
+    public int getCurrentTeam() {
+        return currentTeam;
+    }
+
+    public Random getRand() {
+        return rand;
+    }
+    
+    public double getSmartRisk() {
+        return smartRisk;
     }
 }
