@@ -1,0 +1,24 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group = 'com.example'
+version = '1.0'
+
+sourceCompatibility = '11'
+targetCompatibility = '11'
+
+mainClassName = 'Runner'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.7.1'
+}
+
+test {
+    useJUnitPlatform()
+}

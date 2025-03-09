@@ -8,8 +8,11 @@ import java.awt.image.BufferedImage;
 import java.util.Random;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.logging.Logger;
 
 public class GameEngine implements AIContext {
+    private static final Logger logger = Logger.getLogger(GameEngine.class.getName());
+
     private int mapWidth, mapHeight, numRegions, numTeams;
     double smartRisk;
     private TeamControl[] teamControls;
@@ -102,7 +105,7 @@ public class GameEngine implements AIContext {
         updateVoronoiImage();
     }
 
-    // AI turn initiation now uses a generalized AIManager.
+    // AI turn initiation uses the generalized AIManager.
     public void startTurnIfAI() {
         if (gameOver) return;
         if (teamControls[currentTeam] != TeamControl.HOTSEAT) {
@@ -156,7 +159,7 @@ public class GameEngine implements AIContext {
         if (SwingUtilities.isRightMouseButton(e)) {
             if (regionTeam[clickedRegion] == currentTeam && troops[clickedRegion] >= 10) {
                 executeReinforce(clickedRegion, clickedRegion);
-                System.out.println("Player reinforced region " + clickedRegion + " with 100% bonus.");
+                logger.info("Player reinforced region " + clickedRegion + " with 100% bonus.");
                 if (teamControls[currentTeam] == TeamControl.HOTSEAT) {
                     endTurn();
                 }
@@ -168,7 +171,7 @@ public class GameEngine implements AIContext {
             if (!isBastion[clickedRegion]) {
                 isBastion[clickedRegion] = true;
                 combatPower[clickedRegion] = troops[clickedRegion] * 1.5;
-                System.out.println("Region " + clickedRegion + " turned into a bastion.");
+                logger.info("Region " + clickedRegion + " turned into a bastion.");
                 updateRegionStats(clickedRegion);
                 updateVoronoiImage();
             }
@@ -178,28 +181,28 @@ public class GameEngine implements AIContext {
         if (teamControls[currentTeam] != TeamControl.HOTSEAT) return;
         if (selectedRegion == -1) {
             if (regionTeam[clickedRegion] != currentTeam) {
-                System.out.println("Not your region. Current turn: " + teamNames[currentTeam]);
+                logger.info("Not your region. Current turn: " + teamNames[currentTeam]);
                 return;
             }
             if (troops[clickedRegion] <= 0) {
-                System.out.println("Region " + clickedRegion + " has no troops.");
+                logger.info("Region " + clickedRegion + " has no troops.");
                 return;
             }
             selectedRegion = clickedRegion;
-            System.out.println("Selected source region: " + selectedRegion);
+            logger.info("Selected source region: " + selectedRegion);
         } else {
             if (clickedRegion == selectedRegion) {
                 selectedRegion = -1;
                 return;
             }
             if (!adjacent[selectedRegion][clickedRegion]) {
-                System.out.println("Region " + clickedRegion + " is not adjacent to region " + selectedRegion);
+                logger.info("Region " + clickedRegion + " is not adjacent to region " + selectedRegion);
                 return;
             }
             if (regionTeam[selectedRegion] == regionTeam[clickedRegion]) {
                 executeReinforce(selectedRegion, clickedRegion);
                 selectedRegion = -1;
-                System.out.println("Player reinforced region " + clickedRegion);
+                logger.info("Player reinforced region " + clickedRegion);
                 endTurn();
             } else {
                 executeMove(selectedRegion, clickedRegion);
@@ -282,7 +285,7 @@ public class GameEngine implements AIContext {
     }
 
     public void executeMove(int source, int dest) {
-        System.out.println("Moving troops from region " + source + " to region " + dest);
+        logger.info("Moving troops from region " + source + " to region " + dest);
         lastMoveSource = source;
         lastMoveDest = dest;
         if (siteColors[source].equals(siteColors[dest])) {
@@ -319,7 +322,7 @@ public class GameEngine implements AIContext {
         updateRegionStats(source);
         updateRegionStats(dest);
         updateVoronoiImage();
-        System.out.println("Reinforced region " + dest + " with a 100% bonus.");
+        logger.info("Reinforced region " + dest + " with a 100% bonus.");
     }
 
     private void updateRegionStats(int regionIndex) {
@@ -352,17 +355,21 @@ public class GameEngine implements AIContext {
         selectedRegion = -1;
         currentTeam = (currentTeam + 1) % numTeams;
         while (!teamHasTiles(currentTeam)) {
-            System.out.println("Skipping turn for " + teamNames[currentTeam] + " (no tiles).");
+            logger.info("Skipping turn for " + teamNames[currentTeam] + " (no tiles).");
             currentTeam = (currentTeam + 1) % numTeams;
         }
         if (checkVictory()) {
             gameOver = true;
             int winningTeam = regionTeam[0];
             JOptionPane.showMessageDialog(null, teamNames[winningTeam] + " wins!");
-            System.out.println(teamNames[winningTeam] + " wins!");
+            logger.info(teamNames[winningTeam] + " wins!");
+            // Fire turn ended event with victory info
+            EventBus.getInstance().fireEvent(new TurnEndedEvent(currentTeam));
             return;
         }
-        System.out.println("Turn ended. Current turn: " + teamNames[currentTeam] + " (" + teamControls[currentTeam] + ")");
+        logger.info("Turn ended. Current turn: " + teamNames[currentTeam] + " (" + teamControls[currentTeam] + ")");
+        // Fire event indicating turn has ended
+        EventBus.getInstance().fireEvent(new TurnEndedEvent(currentTeam));
         if (teamControls[currentTeam] != TeamControl.HOTSEAT) {
             new Thread(() -> {
                 try {
@@ -388,6 +395,14 @@ public class GameEngine implements AIContext {
             if (regionTeam[i] != firstTeam) return false;
         }
         return true;
+    }
+
+    private void doDumbAIMove() {
+        // Now delegated via AIManager in startTurnIfAI
+    }
+
+    private void doSmartAIMove() {
+        // Now delegated via AIManager in startTurnIfAI
     }
 
     // --- AIContext Getters ---
