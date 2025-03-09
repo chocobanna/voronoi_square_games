@@ -4,6 +4,8 @@ import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.util.*;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 
@@ -150,7 +152,7 @@ class MainMenuPanel extends JPanel {
 }
 
 /* GamePanel: Renders the game, applies zoom/pan transformations, and manages mouse interactions.
-   The Voronoi diagram is computed in a background thread and then drawn using world coordinates.
+   The Voronoi diagram is computed in a background thread.
    Zooming is controlled via the scrollwheel and panning via middle-mouse dragging.
 */
 class GamePanel extends JPanel {
@@ -166,11 +168,10 @@ class GamePanel extends JPanel {
     public GamePanel(int mapWidth, int mapHeight, int numRegions, int numTeams, TeamControl[] teamControls, double smartRisk) {
         this.mapWidth = mapWidth;
         this.mapHeight = mapHeight;
-        // The preferred size remains the size of the "world" (i.e. the original map dimensions).
         setPreferredSize(new Dimension(mapWidth, mapHeight));
         engine = new GameEngine(mapWidth, mapHeight, numRegions, numTeams, teamControls, smartRisk);
         
-        // Compute the Voronoi diagram off the EDT.
+        // Compute Voronoi diagram off the EDT.
         new Thread(() -> {
             FortuneVoronoi voronoi = new FortuneVoronoi(engine.getSites(), mapWidth, mapHeight);
             SwingUtilities.invokeLater(() -> {
@@ -182,7 +183,7 @@ class GamePanel extends JPanel {
             });
         }).start();
         
-        // Mouse listener for clicks (convert view coordinates to world coordinates).
+        // Mouse listener for clicks and panning.
         addMouseListener(new MouseAdapter() {
             public void mouseClicked(MouseEvent e) {
                 // Only process left/right clicks for game actions.
@@ -192,9 +193,6 @@ class GamePanel extends JPanel {
                     engine.handleMouseClick(worldX, worldY, e);
                     repaint();
                 }
-            }
-            public void mousePressed(MouseEvent e) {
-                // For panning using the middle mouse button.
                 if (SwingUtilities.isMiddleMouseButton(e)) {
                     dragStart = e.getPoint();
                 }
@@ -209,7 +207,6 @@ class GamePanel extends JPanel {
                 repaint();
             }
             public void mouseDragged(MouseEvent e) {
-                // Only pan if middle button is held.
                 if (SwingUtilities.isMiddleMouseButton(e)) {
                     Point dragEnd = e.getPoint();
                     translateX += dragEnd.x - dragStart.x;
@@ -225,11 +222,11 @@ class GamePanel extends JPanel {
             int notches = e.getWheelRotation();
             double oldScale = scale;
             if (notches < 0) {
-                scale *= 1.1; // zoom in
+                scale *= 1.1; // Zoom in.
             } else {
-                scale /= 1.1; // zoom out
+                scale /= 1.1; // Zoom out.
             }
-            // Adjust translation so the zoom is centered at the mouse pointer.
+            // Adjust translation so that zoom centers on the mouse pointer.
             double mouseX = e.getX();
             double mouseY = e.getY();
             translateX = mouseX - ((mouseX - translateX) * (scale / oldScale));
@@ -252,7 +249,8 @@ class GamePanel extends JPanel {
 }
 
 /* GameEngine: Contains game state, rules, and turn management.
-   The mouse interaction methods now accept world coordinates.
+   Mouse interactions now use world coordinates.
+   AI moves are offloaded via an ExecutorService to keep the UI responsive.
 */
 class GameEngine {
     private int mapWidth, mapHeight, numRegions, numTeams;
@@ -283,6 +281,9 @@ class GameEngine {
     
     private Random rand = new Random();
     
+    // ExecutorService for offloading AI computations.
+    private final ExecutorService aiExecutor = Executors.newFixedThreadPool(2);
+    
     public GameEngine(int mapWidth, int mapHeight, int numRegions, int numTeams, TeamControl[] teamControls, double smartRisk) {
         this.mapWidth = mapWidth;
         this.mapHeight = mapHeight;
@@ -290,7 +291,6 @@ class GameEngine {
         this.numTeams = numTeams;
         this.teamControls = teamControls;
         this.smartRisk = smartRisk;
-        
         initTeams();
         initRegions();
     }
@@ -342,29 +342,27 @@ class GameEngine {
         updateVoronoiImage();
     }
     
-    // If the current team is AI-controlled, start its turn in a background thread.
+    // If current team is AI-controlled, start its turn in a background thread.
     public void startTurnIfAI() {
         if (teamControls[currentTeam] != TeamControl.HOTSEAT) {
-            new Thread(() -> {
+            aiExecutor.submit(() -> {
                 try {
                     Thread.sleep(500);
                 } catch (InterruptedException ex) { }
-                SwingUtilities.invokeLater(() -> {
-                    switch (teamControls[currentTeam]) {
-                        case DUMB:
-                            doDumbAIMove();
-                            break;
-                        case SMART:
-                            doSmartAIMove();
-                            break;
-                        case LOSING:
-                            doLosingIsFunAIMove();
-                            break;
-                        default:
-                            break;
-                    }
-                });
-            }).start();
+                switch (teamControls[currentTeam]) {
+                    case DUMB:
+                        doDumbAIMove();
+                        break;
+                    case SMART:
+                        doSmartAIMove();
+                        break;
+                    case LOSING:
+                        doLosingIsFunAIMove();
+                        break;
+                    default:
+                        break;
+                }
+            });
         }
     }
     
@@ -398,7 +396,7 @@ class GameEngine {
         }
     }
     
-    // New mouse interaction methods using world coordinates.
+    // Mouse interactions using world coordinates.
     public void handleMouseClick(int worldX, int worldY, MouseEvent e) {
         int x = worldX;
         int y = worldY;
@@ -431,7 +429,6 @@ class GameEngine {
         
         // Left-click: process player move.
         if (teamControls[currentTeam] != TeamControl.HOTSEAT) return;
-        
         if (selectedRegion == -1) {
             if (regionTeam[clickedRegion] != currentTeam) {
                 System.out.println("Not your region. Current turn: " + teamNames[currentTeam]);
@@ -452,7 +449,7 @@ class GameEngine {
                 System.out.println("Region " + clickedRegion + " is not adjacent to region " + selectedRegion);
                 return;
             }
-            // Friendly move: reinforcement now ends the turn.
+            // Friendly move: reinforcement ends turn.
             if (regionTeam[selectedRegion] == regionTeam[clickedRegion]) {
                 executeReinforce(selectedRegion, clickedRegion);
                 selectedRegion = -1;
@@ -480,7 +477,6 @@ class GameEngine {
         return x >= 0 && x < mapWidth && y >= 0 && y < mapHeight;
     }
     
-    // Render the game.
     public void draw(Graphics2D g2d) {
         if (voronoiImage != null) {
             g2d.drawImage(voronoiImage, 0, 0, null);
@@ -529,15 +525,14 @@ class GameEngine {
         double angle = Math.atan2(y2 - y1, x2 - x1);
         int arrowHeadLength = 10;
         double arrowAngle = Math.toRadians(20);
-        int xArrow1 = (int)(x2 - arrowHeadLength * Math.cos(angle - arrowAngle));
-        int yArrow1 = (int)(y2 - arrowHeadLength * Math.sin(angle - arrowAngle));
-        int xArrow2 = (int)(x2 - arrowHeadLength * Math.cos(angle + arrowAngle));
-        int yArrow2 = (int)(y2 - arrowHeadLength * Math.sin(angle + arrowAngle));
+        int xArrow1 = (int) (x2 - arrowHeadLength * Math.cos(angle - arrowAngle));
+        int yArrow1 = (int) (y2 - arrowHeadLength * Math.sin(angle - arrowAngle));
+        int xArrow2 = (int) (x2 - arrowHeadLength * Math.cos(angle + arrowAngle));
+        int yArrow2 = (int) (y2 - arrowHeadLength * Math.sin(angle + arrowAngle));
         g2d.drawLine(x2, y2, xArrow1, yArrow1);
         g2d.drawLine(x2, y2, xArrow2, yArrow2);
     }
     
-    // Execute an attack move.
     public void executeMove(int source, int dest) {
         System.out.println("Moving troops from region " + source + " to region " + dest);
         lastMoveSource = source;
@@ -550,7 +545,7 @@ class GameEngine {
             double destPower = combatPower[dest];
             if (sourcePower > destPower) {
                 double multiplier = isBastion[source] ? 1.5 : 1.0;
-                int newTroops = (int)Math.floor((sourcePower - destPower) / multiplier);
+                int newTroops = (int) Math.floor((sourcePower - destPower) / multiplier);
                 troops[dest] = newTroops;
                 regionTeam[dest] = regionTeam[source];
                 siteColors[dest] = siteColors[source];
@@ -558,7 +553,7 @@ class GameEngine {
                 troops[source] = 0;
             } else {
                 double multiplier = isBastion[dest] ? 1.5 : 1.0;
-                int newTroops = (int)Math.floor((destPower - sourcePower) / multiplier);
+                int newTroops = (int) Math.floor((destPower - sourcePower) / multiplier);
                 troops[dest] = newTroops;
                 troops[source] = 0;
             }
@@ -568,7 +563,6 @@ class GameEngine {
         updateVoronoiImage();
     }
     
-    // Execute a reinforcement move.
     public void executeReinforce(int source, int dest) {
         lastMoveSource = source;
         lastMoveDest = dest;
@@ -600,7 +594,6 @@ class GameEngine {
         }
     }
     
-    // End the current turn and trigger the next move (including AI moves).
     public void endTurn() {
         for (int i = 0; i < numRegions; i++) {
             troops[i] += 5;
@@ -646,119 +639,133 @@ class GameEngine {
     }
     
     private void doDumbAIMove() {
-        List<int[]> moves = new ArrayList<>();
-        for (int i = 0; i < numRegions; i++) {
-            if (regionTeam[i] == currentTeam && troops[i] > 0) {
-                for (int j = 0; j < numRegions; j++) {
-                    if (adjacent[i][j]) {
-                        moves.add(new int[]{i, j});
+        aiExecutor.submit(() -> {
+            List<int[]> moves = new ArrayList<>();
+            for (int i = 0; i < numRegions; i++) {
+                if (regionTeam[i] == currentTeam && troops[i] > 0) {
+                    for (int j = 0; j < numRegions; j++) {
+                        if (adjacent[i][j]) {
+                            moves.add(new int[]{i, j});
+                        }
                     }
                 }
             }
-        }
-        if (moves.isEmpty()) {
-            System.out.println("Dumb AI (" + teamNames[currentTeam] + ") has no valid moves. Skipping turn.");
-            endTurn();
-            return;
-        }
-        int[] move = moves.get(rand.nextInt(moves.size()));
-        if (regionTeam[move[0]] == regionTeam[move[1]]) {
-            System.out.println("Dumb AI (" + teamNames[currentTeam] + ") reinforces region " + move[1]);
-            executeReinforce(move[0], move[1]);
-        } else {
-            System.out.println("Dumb AI (" + teamNames[currentTeam] + ") attacks from region " + move[0] + " to region " + move[1]);
-            executeMove(move[0], move[1]);
-        }
-        endTurn();
+            if (moves.isEmpty()) {
+                System.out.println("Dumb AI (" + teamNames[currentTeam] + ") has no valid moves. Skipping turn.");
+                SwingUtilities.invokeLater(this::endTurn);
+                return;
+            }
+            int[] move = moves.get(rand.nextInt(moves.size()));
+            SwingUtilities.invokeLater(() -> {
+                if (regionTeam[move[0]] == regionTeam[move[1]]) {
+                    System.out.println("Dumb AI (" + teamNames[currentTeam] + ") reinforces region " + move[1]);
+                    executeReinforce(move[0], move[1]);
+                } else {
+                    System.out.println("Dumb AI (" + teamNames[currentTeam] + ") attacks from region " + move[0] + " to region " + move[1]);
+                    executeMove(move[0], move[1]);
+                }
+                endTurn();
+            });
+        });
     }
     
     private void doSmartAIMove() {
-        double bestScore = Double.NEGATIVE_INFINITY;
-        int[] bestMove = null;
-        boolean isFriendly = false;
-        for (int i = 0; i < numRegions; i++) {
-            if (regionTeam[i] == currentTeam && troops[i] > 0) {
-                for (int j = 0; j < numRegions; j++) {
-                    if (adjacent[i][j]) {
-                        double score = 0.0;
-                        if (regionTeam[i] == regionTeam[j]) {
-                            score = 2 * troops[i];
-                        } else {
-                            double sourcePower = combatPower[i];
-                            double destPower = combatPower[j];
-                            if (sourcePower > destPower) {
-                                score = (sourcePower - destPower) * (1 - smartRisk);
+        aiExecutor.submit(() -> {
+            double bestScore = Double.NEGATIVE_INFINITY;
+            int[] bestMove = null;
+            boolean isFriendly = false;
+            for (int i = 0; i < numRegions; i++) {
+                if (regionTeam[i] == currentTeam && troops[i] > 0) {
+                    for (int j = 0; j < numRegions; j++) {
+                        if (adjacent[i][j]) {
+                            double score;
+                            if (regionTeam[i] == regionTeam[j]) {
+                                score = 2 * troops[i];
                             } else {
-                                score = -1000;
+                                double sourcePower = combatPower[i];
+                                double destPower = combatPower[j];
+                                score = (sourcePower > destPower) ? (sourcePower - destPower) * (1 - smartRisk) : -1000;
                             }
-                        }
-                        if (score > bestScore) {
-                            bestScore = score;
-                            bestMove = new int[]{i, j};
-                            isFriendly = (regionTeam[i] == regionTeam[j]);
+                            if (score > bestScore) {
+                                bestScore = score;
+                                bestMove = new int[]{i, j};
+                                isFriendly = (regionTeam[i] == regionTeam[j]);
+                            }
                         }
                     }
                 }
             }
-        }
-        if (bestMove == null || bestScore <= 0) {
-            System.out.println("Smart AI (" + teamNames[currentTeam] + ") found no advantageous moves. Skipping turn.");
-            endTurn();
-            return;
-        }
-        if (isFriendly) {
-            System.out.println("Smart AI (" + teamNames[currentTeam] + ") reinforces from region " + bestMove[0] + " to region " + bestMove[1] + " with score " + bestScore);
-            executeReinforce(bestMove[0], bestMove[1]);
-        } else {
-            System.out.println("Smart AI (" + teamNames[currentTeam] + ") attacks from region " + bestMove[0] + " to region " + bestMove[1] + " with score " + bestScore);
-            executeMove(bestMove[0], bestMove[1]);
-        }
-        endTurn();
+            final int[] move = bestMove;
+            final double score = bestScore;
+            final boolean friendly = isFriendly;
+            SwingUtilities.invokeLater(() -> {
+                if (move == null || score <= 0) {
+                    System.out.println("Smart AI (" + teamNames[currentTeam] + ") found no advantageous moves. Skipping turn.");
+                    endTurn();
+                    return;
+                }
+                if (friendly) {
+                    System.out.println("Smart AI (" + teamNames[currentTeam] + ") reinforces from region " + move[0] + " to region " + move[1] + " with score " + score);
+                    executeReinforce(move[0], move[1]);
+                } else {
+                    System.out.println("Smart AI (" + teamNames[currentTeam] + ") attacks from region " + move[0] + " to region " + move[1] + " with score " + score);
+                    executeMove(move[0], move[1]);
+                }
+                endTurn();
+            });
+        });
     }
     
     private void doLosingIsFunAIMove() {
-        double worstScore = Double.POSITIVE_INFINITY;
-        int[] worstMove = null;
-        boolean isFriendly = false;
-        for (int i = 0; i < numRegions; i++) {
-            if (regionTeam[i] == currentTeam && troops[i] > 0) {
-                for (int j = 0; j < numRegions; j++) {
-                    if (adjacent[i][j]) {
-                        double score = 0.0;
-                        if (regionTeam[i] == regionTeam[j]) {
-                            score = 2 * troops[i];
-                        } else {
-                            double sourcePower = combatPower[i];
-                            double destPower = combatPower[j];
-                            score = (sourcePower - destPower) * (1 - smartRisk);
-                        }
-                        if (score < worstScore) {
-                            worstScore = score;
-                            worstMove = new int[]{i, j};
-                            isFriendly = (regionTeam[i] == regionTeam[j]);
+        aiExecutor.submit(() -> {
+            double worstScore = Double.POSITIVE_INFINITY;
+            int[] worstMove = null;
+            boolean isFriendly = false;
+            for (int i = 0; i < numRegions; i++) {
+                if (regionTeam[i] == currentTeam && troops[i] > 0) {
+                    for (int j = 0; j < numRegions; j++) {
+                        if (adjacent[i][j]) {
+                            double score;
+                            if (regionTeam[i] == regionTeam[j]) {
+                                score = 2 * troops[i];
+                            } else {
+                                double sourcePower = combatPower[i];
+                                double destPower = combatPower[j];
+                                score = (sourcePower - destPower) * (1 - smartRisk);
+                            }
+                            if (score < worstScore) {
+                                worstScore = score;
+                                worstMove = new int[]{i, j};
+                                isFriendly = (regionTeam[i] == regionTeam[j]);
+                            }
                         }
                     }
                 }
             }
-        }
-        if (worstMove == null) {
-            System.out.println("Losing is Fun AI (" + teamNames[currentTeam] + ") has no valid moves. Skipping turn.");
-            endTurn();
-            return;
-        }
-        if (isFriendly) {
-            System.out.println("Losing is Fun AI (" + teamNames[currentTeam] + ") reinforces from region " + worstMove[0] + " to region " + worstMove[1] + " with score " + worstScore);
-            executeReinforce(worstMove[0], worstMove[1]);
-        } else {
-            System.out.println("Losing is Fun AI (" + teamNames[currentTeam] + ") attacks from region " + worstMove[0] + " to region " + worstMove[1] + " with score " + worstScore);
-            executeMove(worstMove[0], worstMove[1]);
-        }
-        endTurn();
+            final int[] move = worstMove;
+            final double score = worstScore;
+            final boolean friendly = isFriendly;
+            SwingUtilities.invokeLater(() -> {
+                if (move == null) {
+                    System.out.println("Losing is Fun AI (" + teamNames[currentTeam] + ") has no valid moves. Skipping turn.");
+                    endTurn();
+                    return;
+                }
+                if (friendly) {
+                    System.out.println("Losing is Fun AI (" + teamNames[currentTeam] + ") reinforces from region " + move[0] + " to region " + move[1] + " with score " + score);
+                    executeReinforce(move[0], move[1]);
+                } else {
+                    System.out.println("Losing is Fun AI (" + teamNames[currentTeam] + ") attacks from region " + move[0] + " to region " + move[1] + " with score " + score);
+                    executeMove(move[0], move[1]);
+                }
+                endTurn();
+            });
+        });
     }
 }
 
 /* FortuneVoronoi: Computes a simple Voronoi diagram via a nearest-neighbor approach.
-   This class is now independent of the UI; it only computes the diagram.
+   This class is independent of the UI.
 */
 class FortuneVoronoi {
     private int[][] regionAssignment;
