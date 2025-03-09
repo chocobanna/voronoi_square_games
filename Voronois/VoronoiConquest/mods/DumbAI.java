@@ -1,12 +1,13 @@
+// File: mods/DumbAI.java
 package mods;
 
-import main.GameEngine;
+import main.AIContext;
 import javax.swing.SwingUtilities;
 import java.util.ArrayList;
 import java.util.Random;
 
 public class DumbAI {
-    public static void doMove(GameEngine engine) {
+    public static void doMove(AIContext engine) {
         int numRegions = engine.getNumRegions();
         int currentTeam = engine.getCurrentTeam();
         int[] regionTeam = engine.getRegionTeam();
@@ -14,7 +15,7 @@ public class DumbAI {
         boolean[][] adjacent = engine.getAdjacent();
         String[] teamNames = engine.getTeamNames();
         Random rand = engine.getRand();
-        
+
         java.util.List<int[]> moves = new ArrayList<>();
         for (int i = 0; i < numRegions; i++) {
             if (regionTeam[i] == currentTeam && troops[i] > 0) {

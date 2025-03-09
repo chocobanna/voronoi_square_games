@@ -1,3 +1,4 @@
+// File: main/GameEngine.java
 package main;
 
 import javax.swing.*;
@@ -8,9 +9,9 @@ import java.util.Random;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-public class GameEngine {
+public class GameEngine implements AIContext {
     private int mapWidth, mapHeight, numRegions, numTeams;
-    double smartRisk; // Made package-visible for AI access via getter
+    double smartRisk;
     private TeamControl[] teamControls;
 
     // Region data.
@@ -101,7 +102,7 @@ public class GameEngine {
         updateVoronoiImage();
     }
 
-    // Initiates an AI turn if applicable.
+    // AI turn initiation now uses a generalized AIManager.
     public void startTurnIfAI() {
         if (gameOver) return;
         if (teamControls[currentTeam] != TeamControl.HOTSEAT) {
@@ -109,16 +110,7 @@ public class GameEngine {
                 try {
                     Thread.sleep(500);
                 } catch (InterruptedException ex) { }
-                switch (teamControls[currentTeam]) {
-                    case DUMB:
-                        mods.DumbAI.doMove(this);
-                        break;
-                    case SMART:
-                        mods.SmartAI.doMove(this);
-                        break;
-                    default:
-                        break;
-                }
+                mods.AIManager.doMove(this);
             });
         }
     }
@@ -153,9 +145,9 @@ public class GameEngine {
         }
     }
 
-    // Mouse interactions using world coordinates.
     public void handleMouseClick(int worldX, int worldY, MouseEvent e) {
         if (gameOver) return;
+        if (regionAssignment == null) return;
         int x = worldX;
         int y = worldY;
         if (!isValidCoordinate(x, y)) return;
@@ -219,6 +211,7 @@ public class GameEngine {
 
     public void handleMouseMove(int worldX, int worldY, MouseEvent e) {
         if (gameOver) return;
+        if (regionAssignment == null) return;
         mouseX = worldX;
         mouseY = worldY;
         if (isValidCoordinate(mouseX, mouseY)) {
@@ -376,16 +369,7 @@ public class GameEngine {
                     Thread.sleep(500);
                 } catch (InterruptedException ex) { }
                 SwingUtilities.invokeLater(() -> {
-                    switch (teamControls[currentTeam]) {
-                        case DUMB:
-                            mods.DumbAI.doMove(this);
-                            break;
-                        case SMART:
-                            mods.SmartAI.doMove(this);
-                            break;
-                        default:
-                            break;
-                    }
+                    mods.AIManager.doMove(this);
                 });
             }).start();
         }
@@ -406,40 +390,19 @@ public class GameEngine {
         return true;
     }
 
-    // --- Getters for AI access ---
-    public int getNumRegions() {
-        return numRegions;
-    }
-
-    public int[] getRegionTeam() {
-        return regionTeam;
-    }
-
-    public int[] getTroops() {
-        return troops;
-    }
-
-    public boolean[][] getAdjacent() {
-        return adjacent;
-    }
-
-    public double[] getCombatPower() {
-        return combatPower;
-    }
-
-    public String[] getTeamNames() {
-        return teamNames;
-    }
-
-    public int getCurrentTeam() {
-        return currentTeam;
-    }
-
-    public Random getRand() {
-        return rand;
-    }
+    // --- AIContext Getters ---
+    public int getNumRegions() { return numRegions; }
+    public int[] getRegionTeam() { return regionTeam; }
+    public int[] getTroops() { return troops; }
+    public boolean[][] getAdjacent() { return adjacent; }
+    public double[] getCombatPower() { return combatPower; }
+    public String[] getTeamNames() { return teamNames; }
+    public int getCurrentTeam() { return currentTeam; }
+    public Random getRand() { return rand; }
+    public double getSmartRisk() { return smartRisk; }
     
-    public double getSmartRisk() {
-        return smartRisk;
+    // New method to return current team's control type.
+    public TeamControl getTeamControl() {
+        return teamControls[currentTeam];
     }
 }

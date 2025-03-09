@@ -1,10 +1,10 @@
 package main;
 
+import javax.swing.*;
+import javax.swing.border.EmptyBorder;
 import java.awt.*;
 import java.util.*;
 import java.util.List;
-import javax.swing.*;
-import javax.swing.border.EmptyBorder;
 
 public class MainMenuPanel extends JPanel {
     private JTextField widthField;
@@ -101,15 +101,11 @@ public class MainMenuPanel extends JPanel {
                             break;
                     }
                 }
-
-                JFrame gameFrame = new JFrame("Voronoi Conquest - Battle");
-                gameFrame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-                double smartRisk = 0.5;
-                GamePanel gamePanel = new GamePanel(width, height, numRegions, numTeams, teamControls, smartRisk);
-                gameFrame.getContentPane().add(gamePanel);
-                gameFrame.pack();
-                gameFrame.setLocationRelativeTo(null);
-                gameFrame.setVisible(true);
+                
+                // Instead of creating a bare JFrame, create a GameWindow that contains a menu bar
+                GameWindow gameWindow = new GameWindow(width, height, numRegions, numTeams, teamControls, 0.5);
+                gameWindow.setLocationRelativeTo(null);
+                gameWindow.setVisible(true);
             } catch (NumberFormatException ex) {
                 JOptionPane.showMessageDialog(parentFrame, "Invalid input: " + ex.getMessage(), "Input Error", JOptionPane.ERROR_MESSAGE);
             }

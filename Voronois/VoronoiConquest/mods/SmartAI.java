@@ -1,12 +1,13 @@
+// File: mods/SmartAI.java
 package mods;
 
-import main.GameEngine;
+import main.AIContext;
 import javax.swing.SwingUtilities;
 import java.util.ArrayList;
 import java.util.Random;
 
 public class SmartAI {
-    public static void doMove(GameEngine engine) {
+    public static void doMove(AIContext engine) {
         int numRegions = engine.getNumRegions();
         int currentTeam = engine.getCurrentTeam();
         int[] regionTeam = engine.getRegionTeam();
