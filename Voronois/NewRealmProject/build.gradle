@@ -1,0 +1,16 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+repositories {
+    mavenCentral()
+}
+
+application {
+    // Specify the fully qualified main class name.
+    mainClass = 'newrealm.NewRealm'
+}
+
+sourceCompatibility = '1.8'
+targetCompatibility = '1.8'
