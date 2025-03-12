@@ -1,152 +1,138 @@
 package newrealm.diagram;
 
-import java.awt.Color;
-import java.awt.Dimension;
-import java.awt.Graphics;
-import java.awt.Graphics2D;
-import java.awt.event.MouseAdapter;
-import java.awt.event.MouseEvent;
-import java.awt.event.MouseMotionAdapter;
+import javax.swing.*;
+import java.awt.*;
+import java.awt.event.*;
 import java.awt.image.BufferedImage;
 
-import javax.swing.JLabel;
-import javax.swing.JPanel;
-import javax.swing.SwingWorker;
-import javax.swing.Timer;
-
-
+/**
+ * Panel that displays the planetary map rendered on a sphere.
+ * The sphere is centered in the window on a black background.
+ * Use arrow keys (and/or mouse dragging) to spin the sphere.
+ * The mouse wheel zooms infinitely, and extra detail is added by increasing octaves.
+ * The smoothing level can be adjusted from the main menu.
+ */
 public class VoronoiDiagramPanel extends JPanel {
     private int width;
     private int height;
     private BufferedImage finalImage;
+    
+    // Rotation parameters (in radians).
+    private double rotAzimuth = 0;
+    private double rotElevation = 0;
+    
+    // Zoom factor controlling display size and LOD.
     private double scale = 1.0;
-    private double offsetX = 0;
-    private double offsetY = 0;
-
-    // For smooth panning.
-    private int lastDragX, lastDragY;
-    private double velocityX = 0, velocityY = 0;
-    private Timer inertiaTimer;
-
+    
     // Map generation parameters.
     private double pointDensity;
     private int lloydIterations;
     private double waterThreshold = 0.5;
+    
+    // Smoothing iterations for elevation.
+    private int smoothingIterations = 2;
 
     // Last computed biome map for lookup.
     private int[][] lastBiomeMap;
 
-    // Optional status label (bottombar) to display biome under mouse.
+    // Status label for displaying info.
     private JLabel statusLabel;
     public void setStatusLabel(JLabel label) {
         this.statusLabel = label;
     }
-
+    
     public VoronoiDiagramPanel(int width, int height, double pointDensity, int lloydIterations) {
         this.width = width;
         this.height = height;
         this.pointDensity = pointDensity;
         this.lloydIterations = lloydIterations;
-        updatePreferredSize();
+        setPreferredSize(new Dimension(width, height));
+        setBackground(Color.BLACK);
+        setFocusable(true);
+        requestFocusInWindow();
 
+        // Mouse wheel for zooming.
         addMouseWheelListener(e -> {
             double delta = e.getPreciseWheelRotation();
-            double oldScale = scale;
-            double newScale = (delta > 0) ? scale / 1.1 : scale * 1.1;
-            newScale = Math.max(0.5, Math.min(5.0, newScale));
-            double mouseX = e.getX();
-            double mouseY = e.getY();
-            double worldX = (mouseX - offsetX) / oldScale;
-            double worldY = (mouseY - offsetY) / oldScale;
-            scale = newScale;
-            offsetX = mouseX - worldX * scale;
-            offsetY = mouseY - worldY * scale;
-            updatePreferredSize();
-            revalidate();
-            repaint();
+            scale *= (delta > 0) ? 0.9 : 1.1;
+            new DiagramWorker().execute();
         });
 
+        // Key bindings for arrow keys.
+        getInputMap(WHEN_IN_FOCUSED_WINDOW).put(KeyStroke.getKeyStroke("LEFT"), "rotateLeft");
+        getActionMap().put("rotateLeft", new AbstractAction() {
+            public void actionPerformed(ActionEvent e) {
+                rotAzimuth -= 0.05;
+                new DiagramWorker().execute();
+            }
+        });
+        getInputMap(WHEN_IN_FOCUSED_WINDOW).put(KeyStroke.getKeyStroke("RIGHT"), "rotateRight");
+        getActionMap().put("rotateRight", new AbstractAction() {
+            public void actionPerformed(ActionEvent e) {
+                rotAzimuth += 0.05;
+                new DiagramWorker().execute();
+            }
+        });
+        getInputMap(WHEN_IN_FOCUSED_WINDOW).put(KeyStroke.getKeyStroke("UP"), "rotateUp");
+        getActionMap().put("rotateUp", new AbstractAction() {
+            public void actionPerformed(ActionEvent e) {
+                rotElevation -= 0.05;
+                rotElevation = Math.max(-Math.PI/2, rotElevation);
+                new DiagramWorker().execute();
+            }
+        });
+        getInputMap(WHEN_IN_FOCUSED_WINDOW).put(KeyStroke.getKeyStroke("DOWN"), "rotateDown");
+        getActionMap().put("rotateDown", new AbstractAction() {
+            public void actionPerformed(ActionEvent e) {
+                rotElevation += 0.05;
+                rotElevation = Math.min(Math.PI/2, rotElevation);
+                new DiagramWorker().execute();
+            }
+        });
+        
+        // Optional mouse dragging.
         MouseAdapter ma = new MouseAdapter() {
+            private int lastDragX, lastDragY;
+            private double initAzimuth, initElevation;
             @Override
             public void mousePressed(MouseEvent e) {
                 lastDragX = e.getX();
                 lastDragY = e.getY();
-                if (inertiaTimer != null && inertiaTimer.isRunning()) inertiaTimer.stop();
-                velocityX = velocityY = 0;
+                initAzimuth = rotAzimuth;
+                initElevation = rotElevation;
             }
             @Override
             public void mouseDragged(MouseEvent e) {
                 int dx = e.getX() - lastDragX;
                 int dy = e.getY() - lastDragY;
-                offsetX += dx;
-                offsetY += dy;
-                lastDragX = e.getX();
-                lastDragY = e.getY();
-                velocityX = dx;
-                velocityY = dy;
-                updatePreferredSize();
-                revalidate();
-                repaint();
-            }
-            @Override
-            public void mouseReleased(MouseEvent e) {
-                if (Math.abs(velocityX) > 1 || Math.abs(velocityY) > 1) {
-                    inertiaTimer = new Timer(20, ae -> {
-                        offsetX += velocityX;
-                        offsetY += velocityY;
-                        velocityX *= 0.9;
-                        velocityY *= 0.9;
-                        if (Math.abs(velocityX) < 0.5 && Math.abs(velocityY) < 0.5)
-                            inertiaTimer.stop();
-                        updatePreferredSize();
-                        revalidate();
-                        repaint();
-                    });
-                    inertiaTimer.start();
-                }
-            }
-            @Override
-            public void mouseMoved(MouseEvent e) {
-                if (statusLabel != null && lastBiomeMap != null) {
-                    int x = (int) ((e.getX() - offsetX) / scale);
-                    int y = (int) ((e.getY() - offsetY) / scale);
-                    if (x >= 0 && x < width && y >= 0 && y < height)
-                        statusLabel.setText("Biome: " + getBiomeName(lastBiomeMap[x][y]));
-                    else
-                        statusLabel.setText("Biome: Out of bounds");
-                }
+                rotAzimuth = initAzimuth + dx * 0.005;
+                rotElevation = initElevation + dy * 0.005;
+                rotElevation = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, rotElevation));
+                new DiagramWorker().execute();
             }
         };
         addMouseListener(ma);
         addMouseMotionListener(ma);
-        addMouseMotionListener(new MouseMotionAdapter() {
-            @Override
-            public void mouseMoved(MouseEvent e) {
-                ma.mouseMoved(e);
-            }
-        });
-
-        // Start background generation.
+        
         new DiagramWorker().execute();
     }
-
+    
     public void setWaterThreshold(double waterThreshold) {
         this.waterThreshold = waterThreshold;
         new DiagramWorker().execute();
     }
-
-    private void updatePreferredSize() {
-        int left = (int) Math.min(0, offsetX);
-        int top = (int) Math.min(0, offsetY);
-        int right = (int) Math.max(width * scale, offsetX + width * scale);
-        int bottom = (int) Math.max(height * scale, offsetY + height * scale);
-        setPreferredSize(new Dimension(right - left, bottom - top));
+    
+    public void setSmoothingIterations(int iterations) {
+        this.smoothingIterations = iterations;
+        new DiagramWorker().execute();
     }
 
     private class DiagramWorker extends SwingWorker<BufferedImage, Void> {
         @Override
         protected BufferedImage doInBackground() {
-            MapGenerationResult result = MapGenerator.generateMap(width, height, pointDensity, lloydIterations, waterThreshold);
+            MapGenerationResult result = MapGenerator.generateMap(
+                    width, height, pointDensity, lloydIterations,
+                    waterThreshold, rotAzimuth, rotElevation, scale, smoothingIterations);
             lastBiomeMap = result.biomeMap;
             return result.image;
         }
@@ -160,40 +146,28 @@ public class VoronoiDiagramPanel extends JPanel {
             }
         }
     }
-
-    private String getBiomeName(int biome) {
-        switch(biome) {
-            case 0: return "Ocean";
-            case 1: return "Desert";
-            case 2: return "Grassland";
-            case 3: return "Temperate Forest";
-            case 4: return "Mountain";
-            case 5: return "Snow";
-            default: return "Unknown";
-        }
-    }
-
+    
     @Override
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
-        Graphics2D g2 = (Graphics2D) g.create();
-        g2.translate(offsetX, offsetY);
-        g2.scale(scale, scale);
-        if (finalImage != null)
-            g2.drawImage(finalImage, 0, 0, null);
-        else {
-            g2.setColor(Color.BLACK);
-            g2.drawString("Loading Map...", width/2 - 40, height/2);
+        // Fill background black.
+        g.setColor(Color.BLACK);
+        g.fillRect(0, 0, getWidth(), getHeight());
+        
+        if (finalImage != null) {
+            int drawWidth = (int) (finalImage.getWidth() * scale);
+            int drawHeight = (int) (finalImage.getHeight() * scale);
+            int x = (getWidth() - drawWidth) / 2;
+            int y = (getHeight() - drawHeight) / 2;
+            g.drawImage(finalImage, x, y, drawWidth, drawHeight, null);
+        } else {
+            g.setColor(Color.WHITE);
+            g.drawString("Loading Map...", getWidth() / 2 - 40, getHeight() / 2);
         }
-        g2.dispose();
     }
-
+    
     @Override
     public Dimension getPreferredSize() {
-        int left = (int) Math.min(0, offsetX);
-        int top = (int) Math.min(0, offsetY);
-        int right = (int) Math.max(width * scale, offsetX + width * scale);
-        int bottom = (int) Math.max(height * scale, offsetY + height * scale);
-        return new Dimension(right - left, bottom - top);
+        return new Dimension(width, height);
     }
 }

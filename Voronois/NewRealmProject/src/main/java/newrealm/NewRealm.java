@@ -1,17 +1,20 @@
 package newrealm;
 
-import newrealm.diagram.VoronoiDiagramPanel;
-import javax.swing.*;
+import javax.swing.JFrame;
+import javax.swing.SwingUtilities;
+
+import newrealm.diagram.MainMenuPanel;
 
 public class NewRealm {
     public static void main(String[] args) {
         SwingUtilities.invokeLater(() -> {
             JFrame frame = new JFrame("New Realm");
             frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-
-            // Start with the main menu panel.
-            MainMenuPanel mainMenu = new MainMenuPanel(frame);
+            
+            // Use the no-argument constructor for MainMenuPanel.
+            MainMenuPanel mainMenu = new MainMenuPanel();
             frame.getContentPane().add(mainMenu);
+            
             frame.pack();
             frame.setLocationRelativeTo(null);
             frame.setVisible(true);

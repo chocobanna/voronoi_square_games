@@ -1,80 +1,76 @@
-package newrealm;
-
-import newrealm.diagram.VoronoiDiagramPanel;
-import newrealm.config.Config;
+package newrealm.diagram;
 
 import javax.swing.*;
+import javax.swing.event.ChangeEvent;
+import javax.swing.event.ChangeListener;
 import java.awt.*;
-import java.awt.event.ActionEvent;
 
+/**
+ * MainMenuPanel creates a simple user interface that contains the planetary map panel
+ * and a slider to adjust the smoothness (smoothing iterations) of the elevation map.
+ *
+ * You can further extend this panel by adding additional controls (e.g., water threshold,
+ * rotation speed, or status displays) to enhance the user experience.
+ */
 public class MainMenuPanel extends JPanel {
-    private JTextField widthField;
-    private JTextField heightField;
-    private JTextField densityField;
-    private JTextField iterationsField;
 
-    public MainMenuPanel(JFrame frame) {
-        setLayout(new GridBagLayout());
-        GridBagConstraints gbc = new GridBagConstraints();
-        gbc.insets = new Insets(5, 5, 5, 5);
-        gbc.fill = GridBagConstraints.HORIZONTAL;
+    public MainMenuPanel() {
+        // Use BorderLayout to separate the map from the controls.
+        setLayout(new BorderLayout());
 
-        // Map Width
-        gbc.gridx = 0;
-        gbc.gridy = 0;
-        add(new JLabel("Map Width:"), gbc);
-        widthField = new JTextField("800", 10);
-        gbc.gridx = 1;
-        add(widthField, gbc);
+        // Create the map panel (for example, an 800x800 panel; adjust parameters as needed).
+        VoronoiDiagramPanel mapPanel = new VoronoiDiagramPanel(800, 800, 0.001, 0);
+        add(mapPanel, BorderLayout.CENTER);
 
-        // Map Height
-        gbc.gridx = 0;
-        gbc.gridy = 1;
-        add(new JLabel("Map Height:"), gbc);
-        heightField = new JTextField("600", 10);
-        gbc.gridx = 1;
-        add(heightField, gbc);
+        // Create a control panel for user adjustments.
+        JPanel controlPanel = new JPanel(new FlowLayout());
 
-        // Point Density
-        gbc.gridx = 0;
-        gbc.gridy = 2;
-        add(new JLabel("Point Density:"), gbc);
-        densityField = new JTextField(String.valueOf(Config.POINT_DENSITY), 10);
-        gbc.gridx = 1;
-        add(densityField, gbc);
+        // Smoothing slider: lets the user adjust the number of smoothing iterations.
+        JLabel smoothLabel = new JLabel("Smoothness:");
+        JSlider smoothSlider = new JSlider(0, 10, 2);
+        smoothSlider.setMajorTickSpacing(2);
+        smoothSlider.setMinorTickSpacing(1);
+        smoothSlider.setPaintTicks(true);
+        smoothSlider.setPaintLabels(true);
+        smoothSlider.addChangeListener(new ChangeListener() {
+            @Override
+            public void stateChanged(ChangeEvent e) {
+                int value = smoothSlider.getValue();
+                mapPanel.setSmoothingIterations(value);
+            }
+        });
 
-        // Lloyd Iterations
-        gbc.gridx = 0;
-        gbc.gridy = 3;
-        add(new JLabel("Lloyd Iterations:"), gbc);
-        iterationsField = new JTextField(String.valueOf(Config.LLOYD_ITERATIONS), 10);
-        gbc.gridx = 1;
-        add(iterationsField, gbc);
+        controlPanel.add(smoothLabel);
+        controlPanel.add(smoothSlider);
 
-        // Start Button
-        JButton startButton = new JButton("Start");
-        gbc.gridx = 0;
-        gbc.gridy = 4;
-        gbc.gridwidth = 2;
-        add(startButton, gbc);
+        // (Optional) Add additional controls below. For example:
+        // - A slider to adjust water threshold.
+        // - Buttons to reset rotation or zoom.
+        // - A status label showing current rotation/zoom details.
+        // JLabel statusLabel = new JLabel("Status:");
+        // controlPanel.add(statusLabel);
+        // mapPanel.setStatusLabel(statusLabel);
 
-        startButton.addActionListener((ActionEvent e) -> {
-            try {
-                int width = Integer.parseInt(widthField.getText());
-                int height = Integer.parseInt(heightField.getText());
-                double density = Double.parseDouble(densityField.getText());
-                int iterations = Integer.parseInt(iterationsField.getText());
+        add(controlPanel, BorderLayout.SOUTH);
+    }
 
-                // Instantiate the Voronoi diagram panel using the specified options.
-                VoronoiDiagramPanel diagramPanel = new VoronoiDiagramPanel(width, height, density, iterations);
+    /**
+     * Creates and displays the main application window.
+     */
+    public static void createAndShowGUI() {
+        JFrame frame = new JFrame("Planetary Map Generator");
+        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        frame.setContentPane(new MainMenuPanel());
+        frame.pack();
+        frame.setLocationRelativeTo(null); // Center on screen.
+        frame.setVisible(true);
+    }
 
-                // Replace the content pane with the diagram panel.
-                frame.getContentPane().removeAll();
-                frame.getContentPane().add(diagramPanel);
-                frame.revalidate();
-                frame.repaint();
-            } catch (NumberFormatException ex) {
-                JOptionPane.showMessageDialog(frame, "Please enter valid numeric values.", "Input Error", JOptionPane.ERROR_MESSAGE);
+    public static void main(String[] args) {
+        // Schedule a job for the event dispatch thread: creating and showing this application's GUI.
+        SwingUtilities.invokeLater(new Runnable() {
+            public void run() {
+                createAndShowGUI();
             }
         });
     }

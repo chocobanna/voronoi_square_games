@@ -1,22 +1,36 @@
 package newrealm.diagram;
 
+/**
+ * Helper functions for generating noise and smoothing noise maps.
+ */
 public class NoiseUtils {
 
+    /**
+     * Linear interpolation between values a and b.
+     */
     public static double lerp(double a, double b, double t) {
         return a + t * (b - a);
     }
 
+    /**
+     * Fade function as defined by Ken Perlin.
+     */
     public static double fade(double t) {
         return t * t * t * (t * (t * 6 - 15) + 10);
     }
 
-    // A simple hash function returning a pseudo-random value in [0,1].
+    /**
+     * A simple hash function that returns a pseudo-random value in [0, 1].
+     */
     public static double hash(int x, int y) {
         int h = x * 374761393 + y * 668265263;
         h = (h ^ (h >> 13)) * 1274126177;
         return (h & 0x7fffffff) / (double) 0x7fffffff;
     }
 
+    /**
+     * Generates noise based on coordinates.
+     */
     public static double noise(double x, double y) {
         int x0 = (int) Math.floor(x);
         int y0 = (int) Math.floor(y);
@@ -33,6 +47,9 @@ public class NoiseUtils {
         return lerp(ix0, ix1, sy);
     }
 
+    /**
+     * Generates fractal noise by summing multiple octaves.
+     */
     public static double fractalNoise(double x, double y, int octaves, double persistence) {
         double total = 0;
         double frequency = 1;
@@ -47,8 +64,12 @@ public class NoiseUtils {
         return total / maxValue;
     }
 
+    /**
+     * Applies smoothing to a noise map by averaging each cell with its neighbors.
+     */
     public static double[][] smoothMap(double[][] map, int width, int height, int iterations) {
         double[][] result = new double[width][height];
+        // Copy original map into result.
         for (int i = 0; i < width; i++) {
             System.arraycopy(map[i], 0, result[i], 0, height);
         }
