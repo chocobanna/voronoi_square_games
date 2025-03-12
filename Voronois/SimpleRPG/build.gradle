@@ -1,0 +1,16 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // No additional dependencies needed.
+}
+
+application {
+    mainClassName = 'RPGSwingGame'
+}
