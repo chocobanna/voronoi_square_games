@@ -2,15 +2,17 @@ package newrealm.diagram;
 
 import java.awt.Color;
 import java.awt.image.BufferedImage;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.IntStream;
 
 /**
  * Generates a planetary map rendered on a sphere (using an orthographic projection)
- * with rotation, dynamic level-of-detail via extra octaves, elevation smoothing, and
- * increased pixel resolution (detail) when zoomed in.
- *
- * When zoom > 1, the effective resolution is increased by a detail multiplier, so more pixels
- * are computed. These extra pixels yield extra fractal detail when the image is scaled to the view.
+ * with rotation, dynamic level-of-detail via extra octaves, elevation smoothing,
+ * and increased resolution when zoomed in.
+ * 
+ * This version adds a fractal perturbation near the water threshold to create
+ * fractalian coastlines.
  */
 public class MapGenerator {
 
@@ -42,9 +44,13 @@ public class MapGenerator {
     private static final double ELEVATION_DESERT_GRASSLAND = 0.65;
     private static final double ELEVATION_MOUNTAIN = 0.8;
 
+    // Cache for generated maps.
+    private static final Map<String, MapGenerationResult> cache = new ConcurrentHashMap<>();
+
     /**
      * Generates a planetary map image rendered on a sphere with rotation, zoom-controlled LOD,
-     * elevation smoothing, and extra detail (higher resolution) when zoomed in.
+     * elevation smoothing, increased resolution when zoomed in, and fractal coastlines.
+     * Results are cached based on the parameters.
      *
      * @param width               Base image width.
      * @param height              Base image height.
@@ -53,7 +59,7 @@ public class MapGenerator {
      * @param waterThreshold      Elevation threshold below which cells become ocean.
      * @param rotAzimuth          Rotation angle around the vertical axis (in radians).
      * @param rotElevation        Rotation angle around the horizontal axis (in radians).
-     * @param zoom                Zoom factor controlling detail; values > 1 increase extra detail.
+     * @param zoom                Zoom factor controlling detail (values > 1 add extra octaves and resolution).
      * @param smoothingIterations Number of smoothing iterations applied to the elevation map.
      * @return A MapGenerationResult containing the rendered BufferedImage and a biome map.
      */
@@ -68,8 +74,14 @@ public class MapGenerator {
             double zoom,
             int smoothingIterations) {
 
-        // Use a detail multiplier based on zoom.
-        // When zoom <= 1, use a multiplier of 1; otherwise, use Math.ceil(zoom).
+        // Build a cache key based on parameters.
+        String key = width + ":" + height + ":" + zoom + ":" + waterThreshold + ":" +
+                     smoothingIterations + ":" + rotAzimuth + ":" + rotElevation;
+        if (cache.containsKey(key)) {
+            return cache.get(key);
+        }
+
+        // Increase resolution when zoomed in.
         int detailMultiplier = (int) Math.ceil(Math.max(1, zoom));
         int effectiveWidth = width * detailMultiplier;
         int effectiveHeight = height * detailMultiplier;
@@ -77,7 +89,7 @@ public class MapGenerator {
         BufferedImage img = new BufferedImage(effectiveWidth, effectiveHeight, BufferedImage.TYPE_INT_RGB);
         int[][] biomeMap = new int[effectiveWidth][effectiveHeight];
 
-        // Define sphere parameters based on effective resolution.
+        // Define sphere parameters.
         int cx = effectiveWidth / 2;
         int cy = effectiveHeight / 2;
         int sphereRadius = Math.min(effectiveWidth, effectiveHeight) / 2;
@@ -90,7 +102,53 @@ public class MapGenerator {
         if (zoom > 1) {
             effectiveOctaves += (int) Math.ceil(Math.log(zoom) / Math.log(2));
         }
-        final int finalEffectiveOctaves = effectiveOctaves; // for lambda use
+        final int finalEffectiveOctaves = effectiveOctaves; // For lambda use.
+
+        // Precompute raw elevation for the bounding box.
+        int startX = Math.max(0, cx - sphereRadius);
+        int endX = Math.min(effectiveWidth, cx + sphereRadius);
+        int startY = Math.max(0, cy - sphereRadius);
+        int endY = Math.min(effectiveHeight, cy + sphereRadius);
+        double[][] rawElev = new double[effectiveWidth][effectiveHeight];
+
+        // Compute raw elevation in the bounding box in parallel.
+        IntStream.range(startY, endY).parallel().forEach(j -> {
+            for (int i = startX; i < endX; i++) {
+                double dx = (i - cx) / (double) sphereRadius;
+                double dy = (j - cy) / (double) sphereRadius;
+                double distSq = dx * dx + dy * dy;
+                if (distSq > 1) {
+                    rawElev[i][j] = 0;
+                    continue;
+                }
+                double dz = Math.sqrt(1 - distSq);
+                double x = dx, y = dy, z = dz;
+                double x1 = x * Math.cos(rotAzimuth) - y * Math.sin(rotAzimuth);
+                double y1 = x * Math.sin(rotAzimuth) + y * Math.cos(rotAzimuth);
+                double z1 = z;
+                double x2 = x1;
+                double y2 = y1 * Math.cos(rotElevation) - z1 * Math.sin(rotElevation);
+                double z2 = y1 * Math.sin(rotElevation) + z1 * Math.cos(rotElevation);
+                double phi = Math.atan2(y2, x2);
+                double theta = Math.acos(z2);
+                double lat = Math.PI / 2 - theta;
+
+                double noiseX = phi * (effectiveNoiseScale / Math.PI);
+                double noiseY = lat * (effectiveNoiseScale / (Math.PI / 2));
+                double elev = NoiseUtils.fractalNoise(noiseX, noiseY, finalEffectiveOctaves, PERSISTENCE);
+                rawElev[i][j] = elev;
+            }
+        });
+
+        // Smooth the raw elevation in the bounding box.
+        double[][] subElev = new double[endX - startX][endY - startY];
+        for (int i = startX; i < endX; i++) {
+            System.arraycopy(rawElev[i], startY, subElev[i - startX], 0, endY - startY);
+        }
+        double[][] smoothElev = NoiseUtils.smoothMap(subElev, endX - startX, endY - startY, smoothingIterations);
+        for (int i = startX; i < endX; i++) {
+            System.arraycopy(smoothElev[i - startX], 0, rawElev[i], startY, endY - startY);
+        }
 
         // Create a pixel buffer for the effective image.
         int[] pixelBuffer = new int[effectiveWidth * effectiveHeight];
@@ -99,49 +157,40 @@ public class MapGenerator {
             pixelBuffer[i] = blackRGB;
         }
 
-        // Compute the bounding box of the sphere.
-        int startX = Math.max(0, cx - sphereRadius);
-        int endX = Math.min(effectiveWidth, cx + sphereRadius);
-        int startY = Math.max(0, cy - sphereRadius);
-        int endY = Math.min(effectiveHeight, cy + sphereRadius);
-
-        // Process each row in parallel.
+        // Process each pixel in the bounding box in parallel.
         IntStream.range(startY, endY).parallel().forEach(j -> {
             for (int i = startX; i < endX; i++) {
                 double dx = (i - cx) / (double) sphereRadius;
                 double dy = (j - cy) / (double) sphereRadius;
                 double distSq = dx * dx + dy * dy;
                 if (distSq > 1) {
-                    continue;  // Outside the sphere.
+                    continue;
                 }
                 double dz = Math.sqrt(1 - distSq);
-                // Initial 3D point on the unit sphere.
                 double x = dx, y = dy, z = dz;
-                // --- Apply rotations ---
                 double x1 = x * Math.cos(rotAzimuth) - y * Math.sin(rotAzimuth);
                 double y1 = x * Math.sin(rotAzimuth) + y * Math.cos(rotAzimuth);
                 double z1 = z;
                 double x2 = x1;
                 double y2 = y1 * Math.cos(rotElevation) - z1 * Math.sin(rotElevation);
                 double z2 = y1 * Math.sin(rotElevation) + z1 * Math.cos(rotElevation);
-                // --- End rotations ---
-
-                double phi = Math.atan2(y2, x2);      // longitude in radians.
-                double theta = Math.acos(z2);          // polar angle.
-                double lat = Math.PI / 2 - theta;      // latitude.
-
-                // Map spherical coordinates to noise space.
+                double phi = Math.atan2(y2, x2);
+                double theta = Math.acos(z2);
+                double lat = Math.PI / 2 - theta;
                 double noiseX = phi * (effectiveNoiseScale / Math.PI);
                 double noiseY = lat * (effectiveNoiseScale / (Math.PI / 2));
 
-                // Sample noise functions.
-                double elev = NoiseUtils.fractalNoise(noiseX, noiseY, finalEffectiveOctaves, PERSISTENCE);
+                // Retrieve the smoothed elevation.
+                double elev = rawElev[i][j];
+                // Apply fractal coast perturbation if near the water threshold.
+                elev = applyCoastPerturbation(elev, noiseX, noiseY, waterThreshold);
+
                 double temp = NoiseUtils.fractalNoise(noiseX + 1000, noiseY + 1000, finalEffectiveOctaves, PERSISTENCE);
                 double hum  = NoiseUtils.fractalNoise(noiseX + 2000, noiseY + 2000, finalEffectiveOctaves, PERSISTENCE);
 
                 int biome;
                 if (elev < waterThreshold) {
-                    biome = 0; // Ocean.
+                    biome = 0;
                 } else if (elev < ELEVATION_DESERT_GRASSLAND) {
                     if (temp > TEMP_THRESHOLD_HIGH) {
                         biome = (hum < HUMIDITY_THRESHOLD_LOW) ? 1 : 2;
@@ -170,15 +219,31 @@ public class MapGenerator {
             }
         });
 
-        // (Optional) Here you could smooth the raw elevation map within the bounding box before deciding biomes.
-        // For brevity, this code uses the computed "elev" values directly.
-
-        // Set the computed pixel buffer into the image.
         img.setRGB(0, 0, effectiveWidth, effectiveHeight, pixelBuffer, 0, effectiveWidth);
-        
-        // Return the high-resolution image.
-        // The calling panel can then scale this image to the view size.
-        return new MapGenerationResult(img, biomeMap);
+        MapGenerationResult result = new MapGenerationResult(img, biomeMap);
+        cache.put(key, result);
+        return result;
+    }
+
+    /**
+     * If the elevation is within a margin of the water threshold, apply a high-frequency fractal perturbation
+     * to create a more fractal (irregular) coastline.
+     *
+     * @param elev           The raw (smoothed) elevation.
+     * @param noiseX         The noise X coordinate used for this pixel.
+     * @param noiseY         The noise Y coordinate used for this pixel.
+     * @param waterThreshold The water threshold.
+     * @return The perturbed elevation.
+     */
+    private static double applyCoastPerturbation(double elev, double noiseX, double noiseY, double waterThreshold) {
+        double margin = 0.05; // If within 0.05 of threshold, perturb the elevation.
+        if (Math.abs(elev - waterThreshold) < margin) {
+            // Generate a high-frequency noise for the coast.
+            double coastNoise = NoiseUtils.fractalNoise(noiseX + 3000, noiseY + 3000, 3, 0.5);
+            // Shift noise from [0,1] to [-0.05, 0.05] and add to elevation.
+            elev += (coastNoise - 0.5) * 0.1;
+        }
+        return elev;
     }
 
     /**
@@ -187,7 +252,7 @@ public class MapGenerator {
      * @param c1 First color.
      * @param c2 Second color.
      * @param t  Blend factor in [0,1].
-     * @return Blended color.
+     * @return The blended color.
      */
     private static Color blend(Color c1, Color c2, double t) {
         t = Math.max(0, Math.min(1, t));
