@@ -13,7 +13,7 @@ pub fn create_character() -> Character{
         role,
         strength: 1,
         dexterity: 1,
-        constituition: 1,
+        constitution: 1,
         intelligence: 1,
     }
 }
